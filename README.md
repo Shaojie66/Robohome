@@ -18,6 +18,17 @@ robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"   # 
 pytest
 ```
 
+用本地大模型规划和识别（默认 Ollama + qwen3:8b，不需要任何 API Key，也不需要额外的 Python 依赖）：
+
+```bash
+ollama pull qwen3:8b
+robohome run "牛肉化一下，晚上要用" --planner local
+robohome intake "刚从超市回来，买了排骨、虾仁和一箱牛奶" --recognizer local
+robohome run "..." --planner local --model qwen3:14b --base-url http://192.168.1.10:11434/v1
+```
+
+任何兼容 OpenAI Chat Completions 接口的本地服务都能用（llama.cpp server、vLLM、LM Studio），用 `--base-url` 指过去即可；也可以设环境变量 `ROBOHOME_LLM_BASE_URL`、`ROBOHOME_LLM_MODEL`。
+
 用 Claude 规划和识别（需要 `pip install -e ".[claude]"` 和 `ANTHROPIC_API_KEY`）：
 
 ```bash
@@ -50,16 +61,17 @@ robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
 | `skills/` | 技能库：navigate / open / close / pick / place / appliance，每个技能 = 前置条件 + 执行 | 模拟实现 |
 | `appliances/` | 家电适配：统一的 `call(action, params)` 接口 | 模拟家电；之后接 Home Assistant / 米家 |
 | `scheduler/` | 调度器：任务队列、安全规则、前置条件检查、失败即停、回报 | 可用 |
-| `planner/` | 规划层：一句话 → 技能调用序列 | 规则规划器（离线）+ Claude 规划器 |
-| `intake/` | 入库：识别新物品 → 分配容器 → 更新台账 | 关键词识别（离线）+ Claude 识别（文字或照片） |
+| `planner/` | 规划层：一句话 → 技能调用序列 | 规则规划器（离线）+ 大模型规划器 |
+| `intake/` | 入库：识别新物品 → 分配容器 → 更新台账 | 关键词识别（离线）+ 大模型识别（文字或照片） |
+| `llm/` | 大模型后端：本地模型（Ollama 等）或 Claude，接口一致 | 可用 |
 
 每一步执行前依次过三道关：**安全规则 → 技能前置条件 → 执行**，任何一关失败立刻停下并回报，不猜、不重试。
 
-### Claude 规划器怎么工作
+### 大模型规划器怎么工作
 
-1. 把技能清单（带参数 Schema）和当前世界状态交给 Claude，用结构化输出约束它只能返回合法的技能调用；做不到时它会说明原因
+1. 把技能清单（带参数 Schema）和当前世界状态交给大模型，用结构化输出约束它只能返回合法的技能调用；做不到时它会说明原因
 2. 拿到计划先在世界副本上**预演**，安全规则和前置条件都会检查
-3. 预演失败就把原因告诉 Claude 重新规划（默认最多 3 次）
+3. 预演失败就把原因告诉大模型重新规划（默认最多 3 次）
 4. 通过后交给调度器真正执行，执行时照样逐步检查，现实和台账不一致时失败即停
 
 大模型只负责"想"，不直接动手。

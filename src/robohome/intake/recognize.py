@@ -1,18 +1,16 @@
 """识别新买的物品：把一句话或一张照片变成物品清单。
 
 - KeywordRecognizer：离线、零成本，靠关键词表，适合测试和演示
-- LLMRecognizer：用 Claude 识别，能处理任意说法和照片（小票、购物袋）
+- LLMRecognizer：用大模型识别（Claude 或本地模型），能处理任意说法和照片（小票、购物袋）
 """
 
 from __future__ import annotations
 
-import base64
-import json
-import mimetypes
 import re
-from pathlib import Path
 from typing import Any
 
+from ..llm.base import JsonLLM, LLMError
+from ..llm.claude import ClaudeJSON
 from .core import NewItem
 
 # 关键词 → (标准名, 类别, 温区, 默认体积升)
@@ -90,40 +88,22 @@ RECOGNIZE_PROMPT = """你在帮一个家庭机器人做"入库"：主人刚买�
 
 
 class LLMRecognizer:
-    def __init__(self, client: Any = None, model: str = "claude-opus-5-5", effort: str = "low"):
-        if client is None:
-            import anthropic
-
-            client = anthropic.Anthropic()
-        self.client = client
-        self.model = model
-        self.effort = effort
+    def __init__(
+        self, backend: JsonLLM | None = None, *, client: Any = None, model: str = "claude-opus-5-5", effort: str = "low"
+    ):
+        self.backend = backend or ClaudeJSON(client=client, model=model, effort=effort)
 
     def recognize(
         self, text: str = "", image_path: str | None = None, categories: list[str] | None = None
     ) -> tuple[list[NewItem], list[str]]:
-        content: list[dict] = []
-        if image_path:
-            media_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-            data = base64.standard_b64encode(Path(image_path).read_bytes()).decode("utf-8")
-            content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
-        content.append({"type": "text", "text": text or "请识别照片里新买的东西。"})
-
-        response = self.client.beta.messages.create(
-            model=self.model,
-            max_tokens=16000,
-            system=RECOGNIZE_PROMPT.format(categories="、".join(categories or []) or "暂无"),
-            messages=[{"role": "user", "content": content}],
-            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": RECOGNIZE_SCHEMA}},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-        )
-        if response.stop_reason in ("refusal", "max_tokens"):
-            raise RuntimeError(f"识别失败：{response.stop_reason}")
-        text_out = next(b.text for b in response.content if b.type == "text")
-        data = json.loads(text_out)
+        system = RECOGNIZE_PROMPT.format(categories="、".join(categories or []) or "暂无")
+        message = self.backend.user_message(text or "请识别照片里新买的东西。", image_path)
+        try:
+            data, _ = self.backend.complete_json(system, [message], RECOGNIZE_SCHEMA, "intake_items")
+        except LLMError as e:
+            raise RuntimeError(f"识别失败：{e}") from e
         items = [
-            NewItem(i["name"], i["category"], i["temperature"], float(i["volume_l"]), list(i["aliases"]))
+            NewItem(i["name"], i["category"], i["temperature"], float(i["volume_l"]), list(i.get("aliases", [])))
             for i in data["items"]
         ]
-        return items, list(data["unrecognized"])
+        return items, list(data.get("unrecognized", []))

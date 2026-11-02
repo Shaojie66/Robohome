@@ -1,9 +1,11 @@
-"""大模型规划器：让 Claude 把一句话拆成技能调用序列。
+"""大模型规划器：让大模型把一句话拆成技能调用序列。
+
+后端可以是 Claude（云端），也可以是本地模型（Ollama 等），见 robohome.llm。
 
 流程：
-1. 把技能清单（带参数 Schema）和当前世界状态交给 Claude，用结构化输出约束它只能返回合法的技能调用
+1. 把技能清单（带参数 Schema）和当前世界状态交给大模型，用结构化输出约束它只能返回合法的技能调用
 2. 拿到计划后先在世界副本上预演（安全规则 + 前置条件都会检查）
-3. 预演失败就把失败原因告诉 Claude，让它重新规划；超过次数就放弃并说明原因
+3. 预演失败就把失败原因告诉大模型，让它重新规划；超过次数就放弃并说明原因
 
 大模型只负责"想"，不直接动手：真正执行仍然由调度器一步步检查后交给技能。
 """
@@ -13,12 +15,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..llm.base import JsonLLM, LLMError
+from ..llm.claude import ClaudeJSON
 from ..skills.library import catalog
 from ..world import World
 from .base import PlanningError, Step
 from .context import world_json
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-opus-5-5"  # 不指定后端时用 Claude
 
 SYSTEM_PROMPT = """你是一个家庭机器人的任务规划器。家里的一切都已经被"封装"成结构化数据：点位、柜门抽屉、存放区、标准容器、物品台账、联网家电。你的工作是把主人的一句话变成机器人要执行的技能调用序列。
 
@@ -62,18 +66,14 @@ def plan_schema() -> dict:
 class LLMPlanner:
     def __init__(
         self,
+        backend: JsonLLM | None = None,
+        *,
         client: Any = None,
         model: str = DEFAULT_MODEL,
         effort: str = "medium",
         max_attempts: int = 3,
     ):
-        if client is None:
-            import anthropic
-
-            client = anthropic.Anthropic()
-        self.client = client
-        self.model = model
-        self.effort = effort
+        self.backend = backend or ClaudeJSON(client=client, model=model, effort=effort)
         self.max_attempts = max_attempts
         skills = json.dumps(catalog(), ensure_ascii=False, indent=1)
         self.system = SYSTEM_PROMPT.format(skills=skills)
@@ -84,66 +84,35 @@ class LLMPlanner:
         from ..scheduler.core import simulate  # 避免循环导入
 
         messages: list[dict] = [
-            {
-                "role": "user",
-                "content": f"当前世界状态：\n```json\n{world_json(world)}\n```\n\n主人的指令：{instruction}",
-            }
+            self.backend.user_message(
+                f"当前世界状态：\n```json\n{world_json(world)}\n```\n\n主人的指令：{instruction}"
+            )
         ]
+        self.transcript = messages
         last_error = ""
         for _ in range(self.max_attempts):
-            response = self._call(messages)
-            data = self._parse(response)
-            if not data["feasible"]:
-                self.transcript = messages
-                raise PlanningError(data["reason"] or "大模型判断这件事做不到")
+            try:
+                data, assistant = self.backend.complete_json(self.system, messages, self.schema, "plan")
+            except LLMError as e:
+                raise PlanningError(str(e)) from e
+            if not data.get("feasible", False):
+                raise PlanningError(data.get("reason") or "大模型判断这件事做不到")
 
-            steps = [Step(s["skill"], dict(s["args"])) for s in data["steps"]]
+            try:
+                steps = [Step(s["skill"], dict(s["args"])) for s in data["steps"]]
+            except (KeyError, TypeError) as e:
+                raise PlanningError(f"计划格式不对：{e}") from e
             if not steps:
                 raise PlanningError("大模型返回了空计划")
             report = simulate(world, steps)
             if report.ok:
-                self.transcript = messages
                 return steps
 
             failed = report.results[-1]
             last_error = f"第 {failed.index + 1} 步 {failed.step.describe()}：{failed.message}"
             # 只追加，不改写历史：把模型的回复原样放回，再告诉它预演哪里失败
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append(assistant)
             messages.append(
-                {
-                    "role": "user",
-                    "content": f"这个计划在预演中失败了。{last_error}。请修正后给出完整的新计划。",
-                }
+                self.backend.user_message(f"这个计划在预演中失败了。{last_error}。请修正后给出完整的新计划。")
             )
-        self.transcript = messages
         raise PlanningError(f"重试 {self.max_attempts} 次仍未得到可执行的计划，最后一次失败在{last_error}")
-
-    def _call(self, messages: list[dict]) -> Any:
-        return self.client.beta.messages.create(
-            model=self.model,
-            max_tokens=16000,
-            system=self.system,
-            messages=messages,
-            output_config={
-                "effort": self.effort,
-                "format": {"type": "json_schema", "schema": self.schema},
-            },
-            cache_control={"type": "ephemeral"},
-            # 安全分类器误拒时，由服务端自动换模型重试
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-        )
-
-    @staticmethod
-    def _parse(response: Any) -> dict:
-        if response.stop_reason == "refusal":
-            raise PlanningError("大模型拒绝了这条指令")
-        if response.stop_reason == "max_tokens":
-            raise PlanningError("规划输出被截断")
-        text = next((b.text for b in response.content if b.type == "text"), None)
-        if text is None:
-            raise PlanningError("大模型没有返回计划")
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            raise PlanningError(f"计划不是合法 JSON：{e}") from e
