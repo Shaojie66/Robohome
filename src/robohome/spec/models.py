@@ -3,7 +3,8 @@
 一个家由五类东西组成：
 - Room       房间，以及机器人可以停靠的点位（waypoint）
 - Fixture    可操作部件：柜门、抽屉、冰箱门。机器人只会开和关
-- Container  标准容器：尺寸已知、位置已知，物品都装在容器里；碗、杯子这类要归位的东西也按容器登记
+- Container  标准容器：尺寸已知、位置已知，物品都装在容器里；碗、杯子这类要归位的东西也按容器登记；
+             刚买回来、摆在入库台上还没装盒的包装也先按容器登记（kind="parcel"），标签上写着是什么
 - Item       物品台账：每件东西在哪个容器里（倒进家电后就记在家电里）
 - Appliance  联网家电：机器人只调用它的接口，内部工作由家电自己完成
 
@@ -64,6 +65,7 @@ class Fixture:
 
 
 FOOD_KINDS = ("box", "jar")  # 能装食物、入库时可以分配的容器种类
+PARCEL = "parcel"  # 刚买回来、还没装盒的包装
 
 
 @dataclass
@@ -71,14 +73,15 @@ class Container:
     id: str
     name: str
     size_m: Vec3  # 长宽高
-    capacity_l: float
-    location: str  # 存放区 id 或家电 id
+    capacity_l: float = 0.0  # 能装多少升；碗杯和包装可以不写
+    location: str = ""  # 存放区 id 或家电 id
     slot: int = 0
     pose: Pose | None = None
-    kind: str = "box"  # box 保鲜盒 / jar 密封罐 / bowl 碗 / cup 杯子 / object 其他常用物品
+    kind: str = "box"  # box 保鲜盒 / jar 密封罐 / bowl 碗 / cup 杯子 / object 其他常用物品 / parcel 待入库的包装
     safe_for: list[str] = field(default_factory=list)  # 可以放进哪些加热家电（家电 kind），如 ["microwave"]
     home: str | None = None  # 原位：用完要放回的存放区
     home_slot: int | None = None
+    label: str = ""  # 包装上的标签（扫描读到的文字）；空着表示看不清
 
     @property
     def microwave_safe(self) -> bool:
@@ -117,14 +120,15 @@ class Appliance:
 
 @dataclass
 class StorageArea:
-    """存放区：冷冻室、冷藏室、某层橱柜；也可以是餐桌这样的台面（kind="surface"），东西只是临时放在那里。"""
+    """存放区：冷冻室、冷藏室、某层橱柜；也可以是餐桌这样的台面（kind="surface"），东西只是临时放在那里；
+    或者是入库台（kind="intake"）：主人把买回来的东西摆在这里，机器人逐件扫描、装盒、放进对应温区。"""
 
     id: str
     name: str
     room: str
     slots: int
     temperature: Literal["ambient", "chilled", "frozen"] = "ambient"
-    kind: Literal["storage", "surface"] = "storage"
+    kind: Literal["storage", "surface", "intake"] = "storage"
     waypoint: str | None = None  # 没有门的存放区（台面、开放式层架）要写明在哪个点位取放
     geometry: Geometry | None = None  # 三维尺寸和槽位排布（仿真用）
 

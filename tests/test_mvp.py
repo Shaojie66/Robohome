@@ -66,7 +66,7 @@ def test_fault_is_handled_safely(task, fault, expect):
 def test_every_task_has_faults():
     assert all(len(t.faults) >= 3 for t in TASKS)
     kinds = {f.split(":")[0] for t in TASKS for f, _ in t.faults}
-    assert kinds == {"offline", "busy", "missing", "drop", "stuck", "unknown"}
+    assert kinds == {"offline", "busy", "missing", "drop", "stuck", "unknown", "unreadable"}
 
 
 def test_fridge_view_reports_contents():
@@ -89,10 +89,10 @@ def test_air_fryer_time_and_temperature_from_instruction(world):
 
 
 def test_rule_plans_match_the_llm_schema(world):
-    """规则规划器的输出和大模型必须遵守的格式一致，方便对照和回放。"""
+    """规则规划器的输出和大模型必须遵守的格式一致，方便对照和回放。入库任务的装盒由入库规划器写，不交给大模型。"""
     jsonschema = pytest.importorskip("jsonschema")
     schema = plan_schema()
-    for task in TASKS:
+    for task in [t for t in TASKS if not t.parcels]:
         steps = RulePlanner().plan(task.instruction, fresh_world(SPEC))
         payload = {"feasible": True, "reason": "ok", "steps": [{"skill": s.skill, "args": s.args} for s in steps]}
         jsonschema.validate(payload, schema)
@@ -463,7 +463,7 @@ class FixedPlan:
 def test_cli_mvp(capsys):
     assert main(["mvp"]) == 0
     out = capsys.readouterr().out
-    assert "共 5/5 通过" in out
+    assert "共 8/8 通过" in out
 
 
 def test_cli_mvp_faults_for_one_task(capsys):

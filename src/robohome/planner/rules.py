@@ -11,6 +11,7 @@
 - 把洗好的碗从洗碗机收到柜子                → 开洗碗机、逐个取碗、放回原位
 - 把桌上散落的常用物品收回原位              → 拍照识别、逐个放回原位
 - 把牛奶拿出来                              → 取出容器
+- 今天买了一斤五花肉、两盒酸奶（入库）       → 交给入库规划器：扫描入库台上的包装、逐件装盒（关键词识别）
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import re
 from ..world import World
 from .base import PlanningError, Step
 from .builder import Builder
+from .intake import IntakePlanner, is_intake
 
 LOOK_WORDS = ("看看", "查看", "看一下", "看一眼", "有什么", "拍")
 TIDY_WORDS = ("归位", "原位", "收回", "收拾", "收好")
@@ -29,6 +31,10 @@ DEFAULT_DEFROST_MINUTES = 8
 
 class RulePlanner:
     def plan(self, instruction: str, world: World) -> list[Step]:
+        if is_intake(instruction):
+            from ..intake.recognize import KeywordRecognizer
+
+            return IntakePlanner(KeywordRecognizer()).plan(instruction, world)
         if "洗碗机" in instruction:
             return self._unload_dishwasher(instruction, world)
         if "桌" in instruction and any(w in instruction for w in TIDY_WORDS):

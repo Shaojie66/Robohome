@@ -15,7 +15,8 @@ def home_to_dict(home: Home) -> dict:
         "rooms": [asdict(r) for r in home.rooms.values()],
         "storage": [asdict(s) for s in home.storage.values()],
         "fixtures": [asdict(f) for f in home.fixtures.values()],
-        "containers": [asdict(c) for c in home.containers.values()],
+        # 没有标签的容器不写 label，规范文件保持简洁
+        "containers": [{k: v for k, v in asdict(c).items() if k != "label" or v} for c in home.containers.values()],
         "items": [asdict(i) for i in home.items.values()],
         "appliances": [asdict(a) for a in home.appliances.values()],
     }
