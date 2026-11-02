@@ -215,11 +215,21 @@ def check_safe_stop(
     return problems
 
 
-def run_task(task: Task, planner: Planner, spec: str | Path, fault: str | None = None, expect: str = "done") -> Run:
+def run_task(
+    task: Task,
+    planner: Planner,
+    spec: str | Path,
+    fault: str | None = None,
+    expect: str = "done",
+    body: Callable[[World], object] | None = None,
+) -> Run:
+    """body 给了就把世界接到一个身体上（例如物理仿真），技能会让它真的做一遍。"""
     world = fresh_world(spec)
     baseline = fresh_world(spec)  # 没有故障的同一个家，用来确认停下真的是因为故障
     if fault:
         apply_fault(world, fault)
+    if body is not None:
+        body(world)  # 注入的故障在这里交给身体，由物理去体现
     running_before = {a for a in world.home.appliances if world.appliance_running(a)}
     started = time.monotonic()
     [report] = _run_one(world, planner, task.instruction)
@@ -249,6 +259,7 @@ def run_mvp(
     faults: bool = False,
     repeat: int = 1,
     on_run: Callable[[Run], None] | None = None,
+    body: Callable[[World], object] | None = None,
 ) -> list[Run]:
     runs = []
     for task in TASKS:
@@ -256,7 +267,7 @@ def run_mvp(
             continue
         cases = [(f, e) for f, e in task.faults] if faults else [(None, "done")] * max(1, repeat)
         for fault, expect in cases:
-            run = run_task(task, planner, spec, fault, expect)
+            run = run_task(task, planner, spec, fault, expect, body)
             runs.append(run)
             if on_run:
                 on_run(run)

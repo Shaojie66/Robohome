@@ -8,6 +8,10 @@
     robohome mvp                                         # MVP 五个任务各跑一次
     robohome mvp --faults                                # 每个任务注入故障，检查是否安全停下
     robohome mvp --planner local --repeat 20             # 用本地模型连跑 20 次，看成功率
+    robohome sim-check                                   # 检查规范文件的三维数据：容器放得进、手够得着
+    robohome mvp --sim                                   # 在 MuJoCo 物理仿真里跑五个任务
+    robohome mvp --sim --faults --record out/            # 仿真里跑故障测试，每次录成 GIF
+    robohome run "把牛肉拿出来解冻" --record out/          # 在仿真里跑一条指令并录像
     robohome run "把牛肉拿出来解冻" --planner local       # 用本地模型规划（默认 Ollama + qwen3:8b）
     robohome run "把牛肉拿出来解冻" --planner claude      # 用 Claude 规划（需要 ANTHROPIC_API_KEY）
     robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"           # 只预览，不改台账
@@ -57,7 +61,7 @@ def _step_json(s) -> dict:
 
 
 def _photo_json(p) -> dict:
-    return {"location": p.location, "title": p.title, "seen": p.seen, "notes": p.notes}
+    return {"location": p.location, "title": p.title, "seen": p.seen, "notes": p.notes, "image": p.image}
 
 
 def _report_json(r) -> dict:
@@ -93,9 +97,89 @@ def _mvp(args) -> int:
         lines.append(f"→ {mark}（{run.seconds:.1f} 秒）")
         print("\n".join(lines), flush=True)  # 本地模型一次要几十秒，及时打印，免得看起来像卡住
 
-    runs = run_mvp(planner, args.spec, args.task or None, faults=args.faults, repeat=args.repeat, on_run=show)
+    body, after = None, None
+    if args.sim or args.record:
+        made = _sim_body(args.record)
+        if made is None:
+            return 2
+        body, after = made
+
+    def on_run(run) -> None:
+        show(run)
+        if after:
+            after(run)
+
+    runs = run_mvp(planner, args.spec, args.task or None, faults=args.faults, repeat=args.repeat, on_run=on_run, body=body)
     print(summarize(runs))
     return 0 if all(r.passed for r in runs) else 1
+
+
+def _sim_body(record: str | None):
+    """返回 (接上仿真的函数, 每次跑完后存 GIF 的函数)；没装 MuJoCo 时打印提示并返回 None。"""
+    from . import sim
+
+    if not sim.available():
+        print(sim.INSTALL_HINT, file=sys.stderr)
+        return None
+    from .sim.body import SimBody
+    from .sim.render import Recorder
+
+    state: dict = {"n": 0}
+
+    def attach(world) -> None:
+        state["n"] += 1
+        rec = Recorder(record, prefix=f"{state['n']:02d}-") if record else None  # 照片和同一次的 GIF 编号相同
+        state["rec"] = rec
+        SimBody.attach(world, recorder=rec)
+
+    def after(run) -> None:
+        rec = state.get("rec")
+        if rec is None:
+            return
+        name = f"{state['n']:02d}_{run.task.id}" + (f"_{run.fault.replace(':', '-')}" if run.fault else "")
+        path = rec.save_gif(Path(record) / f"{name}.gif")
+        if path:
+            print(f"  录像：{path}", flush=True)
+        elif rec.failed:
+            print("  这台机器上渲染不可用，只跑了物理，没有录像", flush=True)
+
+    return attach, after
+
+
+def _sim_check(args) -> int:
+    from .sim.layout import check_geometry
+
+    try:
+        home = load_home(args.spec)
+    except SpecError as e:
+        print(e, file=sys.stderr)
+        return 2
+    problems = check_geometry(home)
+    for p in problems:
+        print(f"✗ {p}")
+    if not problems:
+        print(f"✓ {home.name}：三维数据没问题，容器都放得进槽位，把手和槽位都够得着")
+    if args.image:
+        from . import sim
+
+        if not sim.available():
+            print(sim.INSTALL_HINT, file=sys.stderr)
+            return 2
+        from .sim.body import SimBody
+        from .sim.render import Recorder
+
+        out = Path(args.image)
+        rec = Recorder(out.parent)
+        body = SimBody(_start_world(home), recorder=None)
+        img = rec._render(body, rec.overview(body))
+        if img is None:
+            print("这台机器上渲染不可用，没有出图", file=sys.stderr)
+            return 2
+        from PIL import Image
+
+        Image.fromarray(img).save(out)
+        print(f"全景图：{out}")
+    return 1 if problems else 0
 
 
 def _intake(args, home, world: World) -> int:
@@ -148,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="规划器：rule 规则（离线）/ local 本地模型 / claude")
     r.add_argument("--model", help="模型名；local 默认 qwen3:8b，claude 默认 claude-opus-5-5")
     r.add_argument("--base-url", help="本地模型服务地址，默认 http://localhost:11434/v1（Ollama）")
+    r.add_argument("--sim", action="store_true", help="在 MuJoCo 物理仿真里执行（需要 pip install 'robohome[sim]'）")
+    r.add_argument("--record", help="录成 GIF，和照片一起存到这个目录（会自动打开 --sim）")
 
     i = sub.add_parser("intake", help="入库：识别新买的物品并分配容器")
     i.add_argument("text", nargs="?", default="")
@@ -169,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--show-plans", action="store_true", help="打印大模型每一轮给的计划")
     m.add_argument("--model")
     m.add_argument("--base-url")
+    m.add_argument("--sim", action="store_true", help="在 MuJoCo 物理仿真里执行（需要 pip install 'robohome[sim]'）")
+    m.add_argument("--record", help="把每次执行录成 GIF，存到这个目录（会自动打开 --sim）")
+
+    c = sub.add_parser("sim-check", help="检查规范文件的三维数据：容器放得进槽位、把手和槽位手够得着")
+    c.add_argument("spec", nargs="?", default=str(DEFAULT_SPEC))
+    c.add_argument("--image", help="顺便渲染一张厨房全景图（需要 MuJoCo）")
 
     sub.add_parser("skills", help="列出技能清单")
 
@@ -179,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "mvp":
         return _mvp(args)
+    if args.cmd == "sim-check":
+        return _sim_check(args)
 
     try:
         home = load_home(args.spec)
@@ -207,10 +301,25 @@ def main(argv: list[str] | None = None) -> int:
     except LLMError as e:
         print(e, file=sys.stderr)
         return 2
+    rec = None
+    if args.sim or args.record:
+        from . import sim
+
+        if not sim.available():
+            print(sim.INSTALL_HINT, file=sys.stderr)
+            return 2
+        from .sim.body import SimBody
+        from .sim.render import Recorder
+
+        rec = Recorder(args.record) if args.record else None
+        SimBody.attach(world, recorder=rec)
     scheduler = Scheduler(world, planner)
     for ins in args.instructions:
         scheduler.submit(ins)
     reports = scheduler.run_pending()
+    if rec is not None:
+        gif = rec.save_gif(Path(args.record) / "run.gif")
+        print(f"录像：{gif}" if gif else "这台机器上渲染不可用，只跑了物理，没有录像", file=sys.stderr)
 
     if args.json:
         print(json.dumps([_report_json(r) for r in reports], ensure_ascii=False, indent=2))

@@ -35,6 +35,7 @@ class Photo:
     seen: list[str]
     notes: list[str] = field(default_factory=list)
     title: str = ""  # 给人看的名字，如"冷冻室"
+    image: str | None = None  # 仿真或真机拍下的图片文件
 
     def describe(self) -> str:
         where = self.title or self.location or self.waypoint
@@ -61,6 +62,9 @@ class World:
     notices: list[str] = field(default_factory=list)  # 执行中发现、需要告诉主人的事
     started_by_robot: set[str] = field(default_factory=set)  # 机器人自己启动、还在运行的家电
     instruction: str = ""  # 正在执行的主人指令，安全规则用它判断主人有没有明确要求某件事
+    # 执行动作的身体：None 时只改内存里的状态（模拟）；换成仿真或真机后，技能会先让它真的做一遍，
+    # 再按它看到的结果更新这里。预演用的副本不带身体
+    body: object | None = None
 
     @classmethod
     def from_home(cls, home: Home, start_room: str | None = None, start_waypoint: str | None = None) -> World:
@@ -115,22 +119,30 @@ class World:
         contents = self._contents(container_id)
         return f"{c.name}（{'、'.join(contents)}）" if contents else c.name
 
-    def look(self, location: str) -> Photo:
-        """拍一张存放区或家电内部的照片。模拟实现：按台账"看到"东西，再把注入的故障体现出来。"""
+    def look(self, location: str, present: list[str] | None = None, unknown: list[str] | None = None) -> Photo:
+        """拍一张存放区或家电内部的照片，并和台账对一遍。
+
+        present 是实际看到的容器（仿真或真机给出）；不给就按台账"看到"，再把注入的故障体现出来。
+        unknown 是看到的、台账里没有的东西。
+        """
         home = self.home
         seen, notes = [], []
-        for c in sorted(home.containers.values(), key=lambda c: c.slot):
-            if c.location != location:
-                continue
-            if c.id in self.missing_containers:
-                notes.append(f"台账里有{c.name}，照片里没看到")
-                continue
-            seen.append(self._label(c.id))
+        ledger = [c.id for c in sorted(home.containers.values(), key=lambda c: c.slot) if c.location == location]
+        if present is None:
+            present = [c for c in ledger if c not in self.missing_containers]
+        for cid in ledger:
+            if cid not in present:
+                notes.append(f"台账里有{home.containers[cid].name}，照片里没看到")
+        for cid in present:
+            c = home.containers[cid]
+            seen.append(self._label(cid))
+            if cid not in ledger:
+                notes.append(f"看到了{c.name}，台账记的却是 {c.location}")
             area = home.storage.get(location)
             if area and area.kind == "surface" and c.home is None:
                 notes.append(f"{c.name}没有登记原位，不知道该放回哪里")
         seen += [i.name for i in home.items.values() if i.container == location]  # 倒进家电里的食物
-        unknown = self.unknown_objects.get(location, [])
+        unknown = self.unknown_objects.get(location, []) if unknown is None else unknown
         if unknown:
             notes.append(f"有台账里没有的东西：{'、'.join(unknown)}")
         area = home.storage.get(location) or home.appliances.get(location)
@@ -147,7 +159,8 @@ class World:
             if f.waypoint == here:
                 seen.append(f"{f.name}{'开着' if f.state == 'open' else '关着'}")
         seen += [f"地上有{self._label(c.id)}" for c in home.containers.values() if c.location == FLOOR]
-        return Photo(here, None, seen, title=f"现场（{here}）")
+        image = self.body.snapshot("scene") if self.body is not None else None
+        return Photo(here, None, seen, title=f"现场（{here}）", image=image)
 
     def sandbox(self) -> World:
         """复制一份用来预演计划的世界：家和机器人状态照搬，家电换成同状态的模拟家电。

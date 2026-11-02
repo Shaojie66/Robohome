@@ -27,6 +27,20 @@ class Pose:
 
 
 @dataclass
+class Geometry:
+    """存放区或家电内部空间的三维尺寸，仿真用它搭模型，也用它检查槽位放不放得下、手够不够得着。
+
+    position 是内部底面的中心；size_m 是内部的宽（x）、深（y）、高（z）；开口朝向由 yaw_deg 决定，
+    0 度表示开口朝 -y（机器人站在 y 更小的一侧）。layout 是槽位排布：几列（x）、几行（y，0 行在最外面）、几层（z）。
+    """
+
+    position: Vec3
+    size_m: Vec3
+    yaw_deg: float = 0.0
+    layout: tuple[int, int, int] | None = None
+
+
+@dataclass
 class Room:
     id: str
     name: str
@@ -45,6 +59,8 @@ class Fixture:
     state: Literal["open", "closed"] = "closed"
     # 部件关上后围起来的存放区，例如冷冻室，容器放在这里
     encloses: str | None = None
+    # 门轴在哪一边（从外面看）：left / right / bottom（洗碗机那种往下翻的门）。不写就放在离把手远的一边；抽屉不用写
+    hinge: Literal["left", "right", "bottom"] | None = None
 
 
 FOOD_KINDS = ("box", "jar")  # 能装食物、入库时可以分配的容器种类
@@ -96,6 +112,7 @@ class Appliance:
     max_temp_c: int | None = None  # 能设温度的家电（空气炸锅、烤箱）允许的最高温度
     slots: int = 1  # 里面能放几个容器，例如洗碗机的碗位
     accepts_pour: bool = False  # 能不能把食物直接倒进去（空气炸锅的炸篮）
+    geometry: Geometry | None = None  # 内部空间的三维尺寸（仿真用）
 
 
 @dataclass
@@ -109,6 +126,7 @@ class StorageArea:
     temperature: Literal["ambient", "chilled", "frozen"] = "ambient"
     kind: Literal["storage", "surface"] = "storage"
     waypoint: str | None = None  # 没有门的存放区（台面、开放式层架）要写明在哪个点位取放
+    geometry: Geometry | None = None  # 三维尺寸和槽位排布（仿真用）
 
 
 @dataclass
