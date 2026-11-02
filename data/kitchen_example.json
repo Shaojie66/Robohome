@@ -1,0 +1,56 @@
+{
+  "name": "样例厨房",
+  "rooms": [
+    {
+      "id": "kitchen",
+      "name": "厨房",
+      "waypoints": {
+        "entrance": {"position": [0.0, 0.0, 0.0], "yaw_deg": 0},
+        "fridge_front": {"position": [1.2, 0.6, 0.0], "yaw_deg": 90},
+        "counter_front": {"position": [2.4, 0.6, 0.0], "yaw_deg": 90},
+        "stove_front": {"position": [3.4, 0.6, 0.0], "yaw_deg": 90}
+      },
+      "forbidden_waypoints": ["stove_front"]
+    }
+  ],
+  "storage": [
+    {"id": "freezer", "name": "冷冻室", "room": "kitchen", "slots": 4, "temperature": "frozen"},
+    {"id": "chiller", "name": "冷藏室", "room": "kitchen", "slots": 6, "temperature": "chilled"},
+    {"id": "upper_cabinet", "name": "吊柜", "room": "kitchen", "slots": 6, "temperature": "ambient"}
+  ],
+  "fixtures": [
+    {"id": "freezer_door", "name": "冷冻室门", "kind": "drawer", "room": "kitchen", "waypoint": "fridge_front",
+     "handle_pose": {"position": [1.2, 1.1, 0.5], "yaw_deg": 90}, "encloses": "freezer"},
+    {"id": "chiller_door", "name": "冷藏室门", "kind": "door", "room": "kitchen", "waypoint": "fridge_front",
+     "handle_pose": {"position": [1.4, 1.1, 1.2], "yaw_deg": 90}, "encloses": "chiller"},
+    {"id": "cabinet_door", "name": "吊柜门", "kind": "door", "room": "kitchen", "waypoint": "counter_front",
+     "handle_pose": {"position": [2.4, 1.2, 1.5], "yaw_deg": 90}, "encloses": "upper_cabinet"},
+    {"id": "microwave_door", "name": "微波炉门", "kind": "door", "room": "kitchen", "waypoint": "counter_front",
+     "handle_pose": {"position": [2.7, 1.1, 1.0], "yaw_deg": 90}, "encloses": "microwave"}
+  ],
+  "containers": [
+    {"id": "box_f1", "name": "冷冻盒 1 号", "size_m": [0.25, 0.18, 0.10], "capacity_l": 4.5,
+     "location": "freezer", "slot": 0, "microwave_safe": true},
+    {"id": "box_f2", "name": "冷冻盒 2 号", "size_m": [0.25, 0.18, 0.10], "capacity_l": 4.5,
+     "location": "freezer", "slot": 1, "microwave_safe": false},
+    {"id": "box_c1", "name": "冷藏盒 1 号", "size_m": [0.30, 0.20, 0.12], "capacity_l": 7.2,
+     "location": "chiller", "slot": 0, "microwave_safe": true},
+    {"id": "box_c2", "name": "冷藏盒 2 号", "size_m": [0.30, 0.20, 0.12], "capacity_l": 7.2,
+     "location": "chiller", "slot": 1, "microwave_safe": false},
+    {"id": "bin_a1", "name": "干货盒 1 号", "size_m": [0.20, 0.15, 0.15], "capacity_l": 4.5,
+     "location": "upper_cabinet", "slot": 0}
+  ],
+  "items": [
+    {"id": "beef", "name": "牛肉", "category": "肉类", "container": "box_f1", "aliases": ["牛排"]},
+    {"id": "dumplings", "name": "速冻饺子", "category": "速冻", "container": "box_f2", "aliases": ["饺子"]},
+    {"id": "milk", "name": "牛奶", "category": "乳制品", "container": "box_c1"},
+    {"id": "eggs", "name": "鸡蛋", "category": "蛋类", "container": "box_c2"},
+    {"id": "rice", "name": "大米", "category": "干货", "container": "bin_a1", "aliases": ["米"]}
+  ],
+  "appliances": [
+    {"id": "microwave", "name": "微波炉", "kind": "microwave", "room": "kitchen", "waypoint": "counter_front",
+     "door": "microwave_door", "capabilities": ["defrost", "heat", "stop"], "hazards": ["heat"]},
+    {"id": "stove", "name": "灶台", "kind": "stove", "room": "kitchen", "waypoint": "stove_front",
+     "capabilities": ["on", "off"], "hazards": ["heat"]}
+  ]
+}
