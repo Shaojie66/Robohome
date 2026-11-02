@@ -18,7 +18,7 @@ import numpy as np
 
 from ..skills.library import SkillFailed
 from ..world import FLOOR, Photo, World
-from .layout import DEFAULT_REACH, Area, Reach
+from .layout import DEFAULT_REACH, HAND_ABOVE_TOP, RELEASE_GAP, Area, Reach
 from .scene import build_mjcf
 
 STEP = 0.002
@@ -75,7 +75,7 @@ class SimBody:
         self._hand_mocap = self.model.body_mocapid[self.model.body("hand").id]
         for f in home.fixtures.values():  # 规范里本来就开着的门
             if f.state == "open" and f.id in info.door_open:
-                self._set_fixture(f.id, info.door_open[f.id])
+                self._open_at_start(home, f.id)
         self._place_hand(self._rest_hand())
         mujoco.mj_forward(self.model, self.data)
         self._settle(0.6)
@@ -306,6 +306,20 @@ class SimBody:
         self.data.qpos[j.qposadr[0]] = q
         self.data.ctrl[self.model.actuator(f"a_{fid}").id] = q
 
+    def _open_at_start(self, home, fid: str) -> None:
+        """一开始就开着的门或抽屉。抽屉里的东西是按关着的位置摆的，要跟着抽屉一起挪出来。"""
+        inside = [a for a, b in self.info.frame_body.items() if b == f"fx_{fid}"]
+        mujoco.mj_forward(self.model, self.data)
+        before = {a: self._frame(self.info.areas[a])[0] for a in inside}
+        self._set_fixture(fid, self.info.door_open[fid])
+        mujoco.mj_forward(self.model, self.data)
+        for a in inside:
+            shift = self._frame(self.info.areas[a])[0] - before[a]
+            names = [f"c_{c}" for c in self.info.containers if home.containers[c].location == a]
+            for name in names + self.info.unknown.get(a, []):
+                adr = self.model.jnt_qposadr[self.model.body_jntadr[self._body_id(name)]]
+                self.data.qpos[adr : adr + 3] += shift
+
     def _handle(self, fid: str) -> np.ndarray:
         return self.data.site_xpos[self.model.site(f"handle_{fid}").id].copy()
 
@@ -359,7 +373,7 @@ class SimBody:
         self.caption = f"取{c.name}"
         area = self._area(c.location)
         slot = area.slot_local(c.slot)
-        top = slot[2] + c.size_m[2] + 0.012
+        top = slot[2] + c.size_m[2] + HAND_ABOVE_TOP
         pre, at = self._approach_points(area, slot, top)
         self._check_reach(at, f"{area.name}槽位 {c.slot}")
         self._move_hand(pre, 0.6)
@@ -373,7 +387,7 @@ class SimBody:
             what = world.home.containers[occupant].name if occupant in world.home.containers else "一个没登记的东西"
             raise SkillFailed(f"{c.location} 槽位 {c.slot} 里是{what}，不是{c.name}，台账可能过期")
         actual = self._container_pos(container)
-        self._move_hand(actual + np.array([0, 0, c.size_m[2] / 2 + 0.012]), 0.3)
+        self._move_hand(actual + np.array([0, 0, c.size_m[2] / 2 + HAND_ABOVE_TOP]), 0.3)
         self._grab(container)
         self._move_hand(self._hand() + np.array([0, 0, CARRY_LIFT]), 0.3)
         self._move_hand(pre, 0.5)
@@ -384,7 +398,7 @@ class SimBody:
         self.caption = f"把{c.name}放进{self._area(location).name}"
         area = self._area(location)
         local = area.slot_local(slot)
-        hand_z = local[2] + c.size_m[2] + 0.012 + 0.01  # 松手时容器离底面 1 厘米
+        hand_z = local[2] + c.size_m[2] + HAND_ABOVE_TOP + RELEASE_GAP
         pre, at = self._approach_points(area, local, hand_z)
         self._check_reach(at, f"{area.name}槽位 {slot}")
         self._move_hand(pre, 0.6)
