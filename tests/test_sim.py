@@ -59,6 +59,13 @@ def test_slot_out_of_reach(raw):
     assert any("碗柜门的把手" in p and "够不着" in p for p in problems)
 
 
+def test_reach_counts_the_hand_above_the_container(raw):
+    """槽位底面够得着还不够：取放时手在容器顶上。餐桌抬到 1.9 米，杯子顶上的手就超过 1.95 米了。"""
+    pos = _area(raw, "dining_table")["geometry"]["position"]
+    pos[2] = 1.9
+    assert any("餐桌槽位" in p and "手够不着" in p for p in check_geometry(parse_home(raw)))
+
+
 def test_handle_must_be_on_the_door(raw):
     next(f for f in raw["fixtures"] if f["id"] == "chiller_door")["handle_pose"]["position"] = [1.6, 0.6, 1.05]
     assert any("冷藏室门的把手" in p and "不在冷藏室的正面上" in p for p in check_geometry(parse_home(raw)))
@@ -154,6 +161,21 @@ def test_drawer_carries_its_contents():
     moved = body._container_pos("box_f1") - before
     assert moved[1] == pytest.approx(-body.info.door_open["freezer_door"], abs=0.02)
     assert body.locate("box_f1") == ("freezer", 0)  # 跟着抽屉出来，还在自己的槽位里
+
+
+def test_drawer_open_at_start_holds_its_contents(raw):
+    """规范里冷冻室抽屉本来就开着：盒子要在拉出来的抽屉里，直接就能取。"""
+    next(f for f in raw["fixtures"] if f["id"] == "freezer_door")["state"] = "open"
+    world = fresh_world(SPEC)
+    world.home = parse_home(raw)
+    world.robot.waypoint = "entrance"
+    body = SimBody.attach(world)
+    assert body.locate("box_f1") == ("freezer", 0)
+    report = _run(world, [{"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+                          {"skill": "inspect", "args": {"location": "freezer"}},
+                          {"skill": "pick", "args": {"container": "box_f1"}}])
+    assert all(r.ok for r in report.results), report.render()
+    assert not report.photos[0].notes  # 照片和台账对得上
 
 
 def test_door_really_swings_open():

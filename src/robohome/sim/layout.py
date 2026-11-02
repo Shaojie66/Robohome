@@ -14,6 +14,8 @@ from ..spec.models import Fixture, Geometry, Home
 
 WALL = 0.02  # 柜壁厚度
 DOOR_GAP = 0.005  # 门板和柜体之间留的缝
+HAND_ABOVE_TOP = 0.012  # 磁吸板贴在容器顶上，手的位置比容器顶高这么多
+RELEASE_GAP = 0.01  # 放下时容器离底面这么高再松手
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,9 @@ def check_geometry(home: Home, reach: Reach = DEFAULT_REACH) -> list[str]:
             problems.append(f"{name}（{loc}）放着容器，但没有写三维尺寸（geometry），仿真搭不出来")
 
     for area in found.values():
+        # 取放时手在容器顶上，按会放在这里的最高的容器算手要伸到的高度
+        tallest = max((c.size_m[2] for c in home.containers.values() if area.id in (c.location, c.home)), default=None)
+        lift = 0.0 if tallest is None else tallest + HAND_ABOVE_TOP + RELEASE_GAP
         cols, rows, levels = area.layout
         if cols * rows * levels < area.slots:
             problems.append(f"{area.name}：排布 {cols}×{rows}×{levels} 放不下 {area.slots} 个槽位")
@@ -155,11 +160,11 @@ def check_geometry(home: Home, reach: Reach = DEFAULT_REACH) -> list[str]:
         drawer_offset = area.drawer_travel if area.style == "drawer" else 0.0
         for slot in range(area.slots):
             x, y, z = area.slot_local(slot)
-            target = to_world(area, (x, y - drawer_offset, z))
+            target = to_world(area, (x, y - drawer_offset, z + lift))
             dist = _horizontal(target, room_waypoints[stand].position)
             if dist > reach.horizontal_m or not reach.min_z <= target[2] <= reach.max_z:
                 problems.append(
-                    f"{area.name}槽位 {slot}：离点位 {stand} 水平 {dist:.2f} 米、高 {target[2]:.2f} 米，手够不着"
+                    f"{area.name}槽位 {slot}：取放时手要伸到离点位 {stand} 水平 {dist:.2f} 米、高 {target[2]:.2f} 米，手够不着"
                     f"（范围是水平 {reach.horizontal_m} 米以内、高 {reach.min_z} 到 {reach.max_z} 米）"
                 )
                 break  # 一个存放区只报第一个够不着的槽位
