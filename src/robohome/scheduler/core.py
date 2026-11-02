@@ -108,7 +108,9 @@ class Scheduler:
         else:
             # 收尾检查：机器人打开的门在任务结束时必须都关上
             left_open = [self.world.home.fixtures[f].name for f in sorted(self.world.opened_by_robot)]
-            if left_open:
+            if not plan:
+                report.ok, report.summary = False, "计划是空的，什么也没做"  # 什么都没做不能报告完成
+            elif left_open:
                 report.ok = False
                 report.summary = f"计划结束时{'、'.join(left_open)}还开着，需要关上"
             else:

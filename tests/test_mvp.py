@@ -616,3 +616,55 @@ def test_model_open_and_navigate_are_done_when_needed(world):
     [report] = s.run_pending()
     assert report.ok, report.render()
     assert TASKS[2].check(world, report) == []
+
+
+# ---------- 合并后 Codex 审查提出的问题 ----------
+
+
+STOP_DISHWASHER = Step("appliance", {"appliance": "dishwasher", "action": "stop", "params": {"minutes": None, "temp_c": None}})
+
+
+@pytest.mark.parametrize("instruction,allowed", [
+    ("把洗碗机停了", True),
+    ("关掉洗碗机和微波炉", True),
+    ("关闭微波炉，然后看看洗碗机里有什么", False),  # 停的是微波炉，不是洗碗机
+    ("关闭微波炉然后看看洗碗机", False),
+    ("别停洗碗机，看看里面有什么", False),
+    ("看看洗碗机里有什么", False),
+])
+def test_stop_permission_names_this_appliance(world, instruction, allowed):
+    apply_fault(world, "busy:dishwasher")
+    report = Scheduler(world, RulePlanner()).execute(instruction, [STOP_DISHWASHER])
+    assert report.ok is allowed, report.render()
+    assert world.appliance_running("dishwasher") is not allowed
+
+
+def test_plan_that_normalizes_to_nothing_is_retried(world):
+    """模型只写了开门：开门会被丢掉，补全后什么都不剩，不能当成完成。"""
+    look = [{"skill": "inspect", "args": {"location": "freezer"}}, {"skill": "inspect", "args": {"location": "chiller"}}]
+    client = FakeClient(plan([{"skill": "open", "args": {"fixture": "freezer_door"}}]), plan(look))
+    planner = LLMPlanner(client=client)
+    steps = planner.plan("看看冰箱里还有什么", world)
+    assert len(client.calls) == 2
+    assert "补全后计划是空的" in planner.attempts[0]["error"]
+    assert [s.skill for s in steps].count("inspect") == 2
+
+
+def test_empty_plan_is_not_success(world):
+    report = Scheduler(world, FixedPlan([])).execute("看看冰箱里还有什么", [])
+    assert not report.ok and "计划是空的" in report.summary
+
+
+def test_checker_rejects_stop_that_is_not_caused_by_the_fault():
+    """计划漏了走到冰箱前，在门口就停下了，根本没碰到"盒子不见了"这个故障。"""
+    broken = FixedPlan([Step("pick", {"container": "box_f1"})])
+    run = run_task(TASKS[1], broken, SPEC, fault="missing:box_f1", expect="stop")
+    assert any("没有这个故障也会在第 1 步停下" in p for p in run.problems), run.problems
+
+
+def test_walk_only_plan_keeps_its_navigate(world):
+    assert normalize([Step("navigate", {"waypoint": "sink_front"})], world) == [Step("navigate", {"waypoint": "sink_front"})]
+    model = [Step("inspect", {"location": "freezer"}), Step("navigate", {"waypoint": "entrance"})]
+    steps = normalize(model, world)
+    assert steps[-1] == Step("navigate", {"waypoint": "entrance"})
+    assert simulate(world, steps).ok
