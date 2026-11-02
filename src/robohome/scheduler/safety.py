@@ -38,7 +38,12 @@ def no_touching_running_hazard(world: World, skill: str, args: dict) -> str | No
     elif skill == "place":
         target = args.get("location")
     a = world.home.appliances.get(target or "")
-    if a and a.hazards and world.appliance_running(a.id):
+    if not (a and a.hazards):
+        return None
+    running = world.appliance_running(a.id)
+    if running is None:
+        return f"读不到{a.name}的状态，可能正在运行（{'/'.join(a.hazards)}），为安全起见不接触"
+    if running:
         return f"{a.name}正在运行（{'/'.join(a.hazards)}），不能接触"
     return None
 

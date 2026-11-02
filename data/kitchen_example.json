@@ -5,42 +5,12 @@
       "id": "kitchen",
       "name": "厨房",
       "waypoints": {
-        "entrance": {
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "yaw_deg": 0
-        },
-        "fridge_front": {
-          "position": [
-            1.2,
-            0.6,
-            0.0
-          ],
-          "yaw_deg": 90
-        },
-        "counter_front": {
-          "position": [
-            2.4,
-            0.6,
-            0.0
-          ],
-          "yaw_deg": 90
-        },
-        "stove_front": {
-          "position": [
-            3.4,
-            0.6,
-            0.0
-          ],
-          "yaw_deg": 90
-        }
+        "entrance": {"position": [0.0, 0.0, 0.0], "yaw_deg": 0},
+        "fridge_front": {"position": [1.2, 0.6, 0.0], "yaw_deg": 90},
+        "counter_front": {"position": [2.4, 0.6, 0.0], "yaw_deg": 90},
+        "stove_front": {"position": [3.4, 0.6, 0.0], "yaw_deg": 90}
       },
-      "forbidden_waypoints": [
-        "stove_front"
-      ]
+      "forbidden_waypoints": ["stove_front"]
     }
   ],
   "storage": [

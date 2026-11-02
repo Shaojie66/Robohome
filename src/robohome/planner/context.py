@@ -18,7 +18,12 @@ def describe_world(world: World) -> dict:
         contents.setdefault(item.container, []).append(item.name)
 
     return {
-        "robot": {"room": world.robot.room, "waypoint": world.robot.waypoint, "holding": world.robot.holding},
+        "robot": {
+            "room": world.robot.room,
+            "waypoint": world.robot.waypoint,
+            "holding": world.robot.holding,
+            "opened_by_robot": sorted(world.opened_by_robot),  # 上一个任务留下没关的门，规划时要先关上
+        },
         "rooms": [
             {
                 "id": r.id,
@@ -60,11 +65,20 @@ def describe_world(world: World) -> dict:
                 "door": a.door,
                 "capabilities": a.capabilities,
                 "hazards": a.hazards,
-                "running": world.appliance_running(a.id),
+                "max_minutes": a.max_minutes,
+                "running": world.appliance_running(a.id),  # None 表示读不到状态
+                "online": _online(world, a.id),
             }
             for a in home.appliances.values()
         ],
     }
+
+
+def _online(world: World, appliance_id: str) -> bool | None:
+    try:
+        return world.appliances[appliance_id].status().get("online", True) is not False
+    except Exception:
+        return None  # appliance_running 已经记过日志
 
 
 def world_json(world: World) -> str:

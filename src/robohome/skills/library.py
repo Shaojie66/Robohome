@@ -163,9 +163,14 @@ def _check_appliance(world: World, appliance: str, action: str, params: dict | N
         return f"家电 {appliance} 不存在"
     if action not in a.capabilities:
         return f"{a.name}不支持 {action}"
-    # 加热、切割这类有危险的动作必须给出运行时间，不能让家电无限期运行
-    if a.hazards and action not in STOP_ACTIONS and not (params or {}).get("minutes"):
-        return f"启动{a.name} {action} 必须指定运行分钟数（params.minutes）"
+    # 加热、切割这类有危险的动作必须给出合理的运行时间，不能让家电无限期运行
+    if a.hazards and action not in STOP_ACTIONS:
+        minutes = (params or {}).get("minutes")
+        # bool 也是 int 的子类，要单独排除
+        if not isinstance(minutes, int) or isinstance(minutes, bool):
+            return f"启动{a.name} {action} 必须指定运行分钟数（params.minutes，整数）"
+        if not 1 <= minutes <= a.max_minutes:
+            return f"{a.name} {action} 的运行时间必须在 1 到 {a.max_minutes} 分钟之间，收到 {minutes}"
     return None
 
 
@@ -239,7 +244,7 @@ SKILLS: dict[str, Skill] = {
                 "params": {
                     "type": "object",
                     "description": "动作参数",
-                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数；启动加热等危险动作时必填，停止时填 null")},
+                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数（整数）；启动加热等危险动作时必填且不超过家电的 max_minutes，停止时填 null")},
                     "required": ["minutes"],
                     "additionalProperties": False,
                 },

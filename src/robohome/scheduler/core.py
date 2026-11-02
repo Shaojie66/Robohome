@@ -2,6 +2,9 @@
 
 每一步按顺序过三道关：安全规则 → 技能前置条件 → 执行。
 任何一关失败就立刻停下（失败即停），不猜、不重试，把停在哪、为什么停回报给主人。
+
+停下之后做一次安全收尾：把机器人自己打开的门尽量关上（同样要过安全规则和前置条件）；
+关不上的门在回报里单独列出来，提醒主人处理。
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ class Report:
     results: list[StepResult] = field(default_factory=list)
     summary: str = ""
     final_state: dict = field(default_factory=dict)
+    cleanup: list[StepResult] = field(default_factory=list)  # 失败后的安全收尾动作
+    needs_attention: list[str] = field(default_factory=list)  # 收尾后仍然开着、需要人处理的门
 
     def render(self) -> str:
         lines = [f"任务：{self.instruction}"]
@@ -38,19 +43,25 @@ class Report:
             mark = "✓" if r.ok else "✗"
             lines.append(f"  {mark} {r.index + 1}. {r.step.describe()}  —  {r.message}")
         lines.append(("完成：" if self.ok else "已停止：") + self.summary)
+        for r in self.cleanup:
+            lines.append(f"  收尾 {'✓' if r.ok else '✗'} {r.step.describe()}  —  {r.message}")
+        if self.needs_attention:
+            lines.append(f"⚠ 需要人处理：{'、'.join(self.needs_attention)}还开着")
         return "\n".join(lines)
 
 
 def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None) -> Report:
     """在世界的副本上预演计划，不改动真实世界。规划层用它在执行前发现问题。"""
-    return Scheduler(world.sandbox(), planner=None, rules=rules).execute("预演", plan)  # type: ignore[arg-type]
+    sandbox = Scheduler(world.sandbox(), planner=None, rules=rules, cleanup=False)  # type: ignore[arg-type]
+    return sandbox.execute("预演", plan)
 
 
 class Scheduler:
-    def __init__(self, world: World, planner: Planner, rules: list[Rule] | None = None):
+    def __init__(self, world: World, planner: Planner, rules: list[Rule] | None = None, cleanup: bool = True):
         self.world = world
         self.planner = planner
         self.rules = rules if rules is not None else list(DEFAULT_RULES)
+        self.cleanup = cleanup  # 预演时关掉，真实执行时打开
         self.queue: deque[str] = deque()
 
     def submit(self, instruction: str) -> None:
@@ -90,8 +101,29 @@ class Scheduler:
                 report.summary = f"计划结束时{'、'.join(left_open)}还开着，需要关上"
             else:
                 report.summary = f"共 {len(plan)} 步"
+        if not report.ok and self.cleanup and self.world.opened_by_robot:
+            report.cleanup = self._close_opened_doors()
+            report.needs_attention = [self.world.home.fixtures[f].name for f in sorted(self.world.opened_by_robot)]
         report.final_state = self.world.snapshot()
         return report
+
+    def _close_opened_doors(self) -> list[StepResult]:
+        """安全收尾：先关当前点位的门，再去别处关。每一步照样过安全规则和前置条件，失败就放弃这扇门。"""
+        fixtures = self.world.home.fixtures
+        here = self.world.robot.waypoint
+        results: list[StepResult] = []
+        for fid in sorted(self.world.opened_by_robot, key=lambda f: (fixtures[f].waypoint != here, f)):
+            fixture = fixtures[fid]
+            steps = []
+            if self.world.robot.waypoint != fixture.waypoint:
+                steps.append(Step("navigate", {"waypoint": fixture.waypoint}))
+            steps.append(Step("close", {"fixture": fid}))
+            for step in steps:
+                result = self._run_step(-1, step)
+                results.append(result)
+                if not result.ok:
+                    break
+        return results
 
     def _run_step(self, i: int, step: Step) -> StepResult:
         skill = SKILLS.get(step.skill)

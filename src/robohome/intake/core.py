@@ -115,22 +115,74 @@ def choose_container(world: World, item: NewItem) -> tuple[str | None, str]:
                   "需要清理或添置容器")
 
 
+def _record(world: World, item: NewItem, container: str, volume: float) -> str:
+    item_id = _new_item_id(world)
+    world.home.items[item_id] = Item(
+        id=item_id,
+        name=item.name,
+        category=item.category,
+        container=container,
+        aliases=list(item.aliases),
+        volume_l=volume,
+    )
+    return item_id
+
+
+def _split(world: World, item: NewItem) -> tuple[list[tuple[str, float]], float]:
+    """一个容器放不下时（比如一箱牛奶），分装到同温区的多个容器里。返回 [(容器, 体积)] 和放不下的剩余体积。"""
+    home = world.home
+    remaining = item.volume_l
+    parts: list[tuple[str, float]] = []
+    used: dict[str, float] = {}
+
+    def room_left(cid: str) -> float:
+        return home.containers[cid].capacity_l - _used_volume(world, cid) - used.get(cid, 0.0)
+
+    while remaining > 1e-9:
+        candidates = [
+            c.id for c in home.containers.values()
+            if c.location in home.storage
+            and home.storage[c.location].temperature == item.temperature
+            and _categories(world, c.id) <= {item.category}  # 空的或同类的，不混装
+            and room_left(c.id) > 1e-9
+        ]
+        if not candidates:
+            break
+        best = max(candidates, key=lambda cid: (room_left(cid), cid))
+        portion = round(min(remaining, room_left(best)), 3)
+        parts.append((best, portion))
+        used[best] = used.get(best, 0.0) + portion
+        remaining = round(remaining - portion, 3)
+    return parts, remaining
+
+
 def assign(world: World, items: list[NewItem], commit: bool = True) -> IntakeResult:
-    """逐件分配容器。commit=True 时直接写进台账，后面的物品会看到前面物品占掉的空间。"""
+    """逐件分配容器。commit=True 时直接写进台账，后面的物品会看到前面物品占掉的空间。
+
+    要预览而不改台账，就在 world.sandbox() 上调用。
+    """
     result = IntakeResult()
     for item in items:
         container, note = choose_container(world, item)
-        placement = Placement(item, container, note=note)
-        if container and commit:
-            item_id = _new_item_id(world)
-            world.home.items[item_id] = Item(
-                id=item_id,
-                name=item.name,
-                category=item.category,
-                container=container,
-                aliases=list(item.aliases),
-                volume_l=item.volume_l,
-            )
-            placement.item_id = item_id
-        result.placements.append(placement)
+        if container:
+            placement = Placement(item, container, note=note)
+            if commit:
+                placement.item_id = _record(world, item, container, item.volume_l)
+            result.placements.append(placement)
+            continue
+
+        parts, left = _split(world, item) if item.volume_l > 0 else ([], item.volume_l)
+        if len(parts) < 2 and left > 0:
+            # 分装也装不下（或根本没有可用容器），整件报告，不拆
+            result.placements.append(Placement(item, None, note=note))
+            continue
+        for n, (cid, volume) in enumerate(parts, 1):
+            part = NewItem(item.name, item.category, item.temperature, volume, list(item.aliases))
+            placement = Placement(part, cid, note=f"（分装 {n}/{len(parts)}）")
+            if commit:
+                placement.item_id = _record(world, part, cid, volume)
+            result.placements.append(placement)
+        if left > 0:
+            rest = NewItem(item.name, item.category, item.temperature, left, list(item.aliases))
+            result.placements.append(Placement(rest, None, note=f"还剩 {left:g} 升放不下，需要清理或添置容器"))
     return result

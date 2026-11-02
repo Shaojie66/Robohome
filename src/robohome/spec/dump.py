@@ -21,7 +21,19 @@ def home_to_dict(home: Home) -> dict:
     }
 
 
+def dumps_compact(value, width: int = 210, indent: int = 0) -> str:
+    """缩进格式的 JSON，但放得下一行的对象、列表就写成一行（一条记录一行），方便人读和改。"""
+    flat = json.dumps(value, ensure_ascii=False)
+    if not isinstance(value, (dict, list)) or len(flat) + indent <= width or not value:
+        return flat
+    pad, inner = " " * indent, " " * (indent + 2)
+    if isinstance(value, dict):
+        body = [f"{inner}{json.dumps(k, ensure_ascii=False)}: {dumps_compact(v, width, indent + 2)}" for k, v in value.items()]
+        return "{\n" + ",\n".join(body) + f"\n{pad}}}"
+    body = [inner + dumps_compact(v, width, indent + 2) for v in value]
+    return "[\n" + ",\n".join(body) + f"\n{pad}]"
+
+
 def save_home(home: Home, path: str | Path) -> None:
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump(home_to_dict(home), fh, ensure_ascii=False, indent=2)
-        fh.write("\n")
+        fh.write(dumps_compact(home_to_dict(home)) + "\n")

@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass, field
 
 from .appliances.base import ApplianceAdapter, MockAppliance
 from .spec.models import Home
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,11 +52,13 @@ class World:
             if a.door and isinstance(adapter, MockAppliance):
                 adapter.door_closed = self.home.fixtures[a.door].state == "closed"
 
-    def appliance_running(self, appliance_id: str) -> bool:
+    def appliance_running(self, appliance_id: str) -> bool | None:
+        """True 在运行，False 没在运行，None 读不到状态（安全规则会按"可能在运行"处理）。"""
         try:
             return bool(self.appliances[appliance_id].status().get("running"))
-        except Exception:
-            return False
+        except Exception as e:
+            log.warning("读不到 %s 的运行状态：%s", appliance_id, e)
+            return None
 
     def container_at(self, location: str, slot: int) -> str | None:
         for c in self.home.containers.values():
@@ -64,18 +69,22 @@ class World:
     def sandbox(self) -> World:
         """复制一份用来预演计划的世界：家和机器人状态照搬，家电换成同状态的模拟家电。
 
-        预演只知道台账里写的东西，所以不带 missing_containers；家电默认在线。
+        预演只知道台账里写的东西，所以不带 missing_containers；家电在线与否照搬已知状态。
         """
         adapters: dict[str, ApplianceAdapter] = {}
         for a in self.home.appliances.values():
-            status = {}
+            status, online = {}, True
             try:
                 status = self.appliances[a.id].status()
-            except Exception:
-                pass
+                online = status.get("online", True) is not False
+            except Exception as e:
+                # 读不到状态就按"离线"预演，和真实执行时会遇到的情况一致
+                log.warning("预演时读不到 %s 的状态：%s", a.id, e)
+                online = False
             adapters[a.id] = MockAppliance(
                 appliance_id=a.id,
                 capabilities=list(a.capabilities),
+                online=online,
                 running=bool(status.get("running")),
                 mode=status.get("mode"),
             )
@@ -95,5 +104,12 @@ class World:
             "holding": self.robot.holding,
             "open_fixtures": [f.id for f in self.home.fixtures.values() if f.state == "open"],
             "opened_by_robot": sorted(self.opened_by_robot),
-            "appliances": {k: v.status() for k, v in self.appliances.items()},
+            "appliances": {k: self._status_or_error(v) for k, v in self.appliances.items()},
         }
+
+    @staticmethod
+    def _status_or_error(adapter: ApplianceAdapter) -> dict:
+        try:
+            return adapter.status()
+        except Exception as e:
+            return {"error": f"读不到状态：{e}"}
