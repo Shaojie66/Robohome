@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 claude = ["anthropic>=2.3"]
+sim = ["mujoco>=3.2", "pillow>=10"]
 dev = ["pytest>=8", "jsonschema>=4"]
 
 [project.scripts]

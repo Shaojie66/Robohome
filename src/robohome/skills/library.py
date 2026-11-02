@@ -75,6 +75,8 @@ def _check_navigate(world: World, waypoint: str) -> str | None:
 
 
 def _run_navigate(world: World, waypoint: str) -> str:
+    if world.body is not None:
+        world.body.navigate(world, waypoint)  # 半路滑落会抛 SkillFailed，并把容器记到地上
     held = world.robot.holding
     if held and held in world.slippery:
         # 搬运途中滑落：东西掉在原地，机器人停在原地，不再继续
@@ -101,6 +103,8 @@ def _check_fixture(world: World, fixture: str, want: str) -> str | None:
 
 
 def _run_open(world: World, fixture: str) -> str:
+    if world.body is not None:
+        world.body.open(world, fixture)
     f = world.home.fixtures[fixture]
     if fixture in world.stuck_fixtures:
         raise SkillFailed(f"{f.name}拉不开，可能卡住了")
@@ -111,6 +115,8 @@ def _run_open(world: World, fixture: str) -> str:
 
 
 def _run_close(world: World, fixture: str) -> str:
+    if world.body is not None:
+        world.body.close(world, fixture)
     f = world.home.fixtures[fixture]
     if fixture in world.stuck_fixtures:
         raise SkillFailed(f"{f.name}关不上，可能卡住了")
@@ -139,6 +145,8 @@ def _check_pick(world: World, container: str) -> str | None:
 
 
 def _run_pick(world: World, container: str) -> str:
+    if world.body is not None:
+        world.body.pick(world, container)  # 到了发现东西不在、或者是别的容器，会抛 SkillFailed
     c = world.home.containers[container]
     if container in world.missing_containers:
         raise SkillFailed(f"到了 {c.location} 槽位 {c.slot} 没找到{c.name}，台账可能过期")
@@ -167,8 +175,13 @@ def _check_place(world: World, container: str, location: str, slot: int = 0) -> 
 
 def _run_place(world: World, container: str, location: str, slot: int = 0) -> str:
     c = world.home.containers[container]
-    c.location, c.slot = location, slot
+    actual = (location, slot)
+    if world.body is not None:
+        actual = world.body.place(world, container, location, slot)  # 松手后它实际落在哪
+    c.location, c.slot = actual
     world.robot.holding = None
+    if actual != (location, slot):
+        raise SkillFailed(f"{c.name}没放稳，最后落在 {actual[0]} 槽位 {actual[1]}，不是 {location} 槽位 {slot}")
     return f"把{c.name}放进 {location} 槽位 {slot}"
 
 
@@ -186,7 +199,7 @@ def _check_inspect(world: World, location: str) -> str | None:
 
 
 def _run_inspect(world: World, location: str) -> str:
-    photo = world.look(location)
+    photo = world.body.inspect(world, location) if world.body is not None else world.look(location)
     world.photos.append(photo)
     world.notices += photo.notes
     return f"拍照：{photo.describe()}"
@@ -210,6 +223,8 @@ def _check_pour(world: World, container: str, into: str) -> str | None:
 
 
 def _run_pour(world: World, container: str, into: str) -> str:
+    if world.body is not None:
+        world.body.pour(world, container, into)
     moved = [i for i in world.home.items.values() if i.container == container]
     for i in moved:
         i.container = into
@@ -257,6 +272,8 @@ def _run_appliance(world: World, appliance: str, action: str, params: dict | Non
         world.started_by_robot.discard(appliance)
     else:
         world.started_by_robot.add(appliance)
+    if world.body is not None:
+        world.body.appliance(world, appliance, bool(status.get("running")))
     name = world.home.appliances[appliance].name
     return f"调用{name} {action} {params if params else ''}".rstrip() + f" → running={status.get('running')}"
 
