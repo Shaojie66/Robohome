@@ -92,9 +92,26 @@ def test_llm_replans_after_failed_simulation(world):
 
 
 def test_llm_infeasible_raises_with_reason(world):
-    client = FakeClient(plan([], feasible=False, reason="台账里没有榴莲"))
+    # 第一次说做不到会被要求核实一次，核实后还是做不到才放弃
+    client = FakeClient(plan([], feasible=False, reason="台账里没有榴莲"), plan([], feasible=False, reason="台账里没有榴莲"))
     with pytest.raises(PlanningError, match="榴莲"):
         LLMPlanner(client=client).plan("把榴莲拿出来", world)
+    assert len(client.calls) == 2
+    assert "核实" in str(client.calls[1]["messages"][-1]["content"])
+
+
+def test_llm_wrong_refusal_is_challenged_once(world):
+    good = [
+        {"skill": "pick", "args": {"container": "box_f1"}},
+        {"skill": "place", "args": {"container": "box_f1", "location": "microwave", "slot": 0}},
+        {"skill": "appliance", "args": {"appliance": "microwave", "action": "defrost", "params": {"minutes": 8, "temp_c": None}}},
+    ]
+    client = FakeClient(plan([], feasible=False, reason="微波炉不能放盒子"), plan(good))
+    planner = LLMPlanner(client=client)
+    steps = planner.plan("把牛肉拿出来解冻", world)
+    assert any(s.skill == "appliance" and s.args["appliance"] == "microwave" for s in steps)
+    assert len(client.calls) == 2
+    assert "做不到" in planner.attempts[0]["error"]
 
 
 def test_llm_gives_up_after_max_attempts(world):

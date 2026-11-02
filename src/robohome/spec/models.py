@@ -77,6 +77,8 @@ class Item:
     container: str  # 容器 id；倒进家电（如空气炸锅）后是家电 id
     aliases: list[str] = field(default_factory=list)
     volume_l: float = 0.0  # 占用容器的体积，入库分配容器时用
+    # 怎么加热：家电动作 → 参数，例如 {"air_fry": {"minutes": 12, "temp_c": 180}}，相当于包装上的做法说明
+    cook: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass

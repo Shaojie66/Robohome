@@ -4,7 +4,7 @@
 所以走动和开关门不需要大模型操心，由这里按固定规矩补上：
 
 - 取放、拍照、倒东西之前，先走到对应点位，有门就打开
-- 离开一个点位前，关上在这里打开的门
+- 离开一个点位前，关上在这里打开的门；后面用不到的门当场就关（冷冻门和冷藏门不会一起开着）
 - 放东西只放空槽位：指定的槽位被占了就换同一处的空槽位
 - 启动带危险的家电前，先关好它的门；手里还拿着东西就先放回取出的地方
 - 第一次从台面（餐桌）取东西前先拍照确认（方案文档："查台账，到点后视觉确认"）
@@ -155,7 +155,7 @@ def normalize(steps: list[Step], world: World) -> list[Step]:
     """
     b = Builder(world)
     home = world.home
-    for step in steps:
+    for i, step in enumerate(steps):
         a = step.args if isinstance(step.args, dict) else {}
         skill = step.skill
         if skill == "navigate" and a.get("waypoint") in home.rooms[world.robot.room].waypoints:
@@ -182,4 +182,30 @@ def normalize(steps: list[Step], world: World) -> list[Step]:
             b.call(a["appliance"], a.get("action", ""), a.get("params") if isinstance(a.get("params"), dict) else None)
         else:
             b.steps.append(step)
+        _close_unneeded(b, steps[i + 1:])
     return b.finish()
+
+
+def _close_unneeded(b: Builder, rest: list[Step]) -> None:
+    """后面的步骤用不到的门，趁人还在跟前就关上，不等到最后。"""
+    if not b.opened:
+        return
+    needed = set()
+    for step in rest:
+        a = step.args if isinstance(step.args, dict) else {}
+        if step.skill == "pick" and a.get("container") in b.where:
+            needed.add(b.where[a["container"]][0])
+        elif step.skill == "place":
+            needed.add(a.get("location"))
+        elif step.skill == "inspect":
+            needed.add(a.get("location"))
+        elif step.skill == "pour":
+            needed.add(a.get("into"))
+        elif step.skill in ("open", "close") and a.get("fixture") in b.home.fixtures:
+            needed.add(b.home.fixtures[a["fixture"]].encloses)
+        elif step.skill not in ("navigate", "appliance"):
+            return  # 认不出来的步骤可能还要用这扇门，保持原样
+    for fid in sorted(b.opened):
+        f = b.home.fixtures[fid]
+        if f.waypoint == b.waypoint and f.encloses not in needed:
+            b.close(fid)

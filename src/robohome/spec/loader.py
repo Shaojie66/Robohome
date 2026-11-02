@@ -163,6 +163,14 @@ def validate(home: Home) -> None:
     for i in home.items.values():
         if i.container not in home.containers and i.container not in home.appliances:
             errors.append(f"物品 {i.id}: 容器 {i.container} 不存在")
+        for action, params in (i.cook or {}).items():
+            able = [a for a in home.appliances.values() if action in a.capabilities]
+            if not able:
+                errors.append(f"物品 {i.id}: 没有家电能做 {action}")
+            elif not isinstance(params, dict):
+                errors.append(f"物品 {i.id}: {action} 的参数要写成对象")
+            elif not any(params.get("minutes", 0) <= (a.max_minutes or 10**6) and params.get("temp_c", 0) <= (a.max_temp_c or 10**6) for a in able):
+                errors.append(f"物品 {i.id}: {action} 的时间或温度超出家电上限")
 
     for a in home.appliances.values():
         waypoint_ok(a.room, a.waypoint, f"家电 {a.id}")

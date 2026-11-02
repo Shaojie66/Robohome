@@ -48,12 +48,12 @@
     {"id": "jar_salt", "name": "盐罐", "kind": "jar", "size_m": [0.08, 0.08, 0.1], "capacity_l": 0.5, "location": "dining_table", "slot": 1, "home": "upper_cabinet", "home_slot": 2}
   ],
   "items": [
-    {"id": "beef", "name": "牛肉", "category": "肉类", "container": "box_f1", "aliases": ["牛排"], "volume_l": 1.0},
+    {"id": "beef", "name": "牛肉", "category": "肉类", "container": "box_f1", "aliases": ["牛排"], "volume_l": 1.0, "cook": {"defrost": {"minutes": 8}}},
     {"id": "dumplings", "name": "速冻饺子", "category": "速冻", "container": "box_f2", "aliases": ["饺子"], "volume_l": 1.5},
     {"id": "milk", "name": "牛奶", "category": "乳制品", "container": "box_c1", "volume_l": 2.0},
     {"id": "eggs", "name": "鸡蛋", "category": "蛋类", "container": "box_c2", "volume_l": 1.5},
     {"id": "rice", "name": "大米", "category": "干货", "container": "bin_a1", "aliases": ["米"], "volume_l": 2.5},
-    {"id": "popcorn_chicken", "name": "鸡米花", "category": "炸物", "container": "jar_f1", "volume_l": 1.0},
+    {"id": "popcorn_chicken", "name": "鸡米花", "category": "炸物", "container": "jar_f1", "volume_l": 1.0, "cook": {"air_fry": {"minutes": 12, "temp_c": 180}}},
     {"id": "salt", "name": "盐", "category": "调料", "container": "jar_salt", "volume_l": 0.3}
   ],
   "appliances": [

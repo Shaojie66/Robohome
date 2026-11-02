@@ -484,3 +484,82 @@ def test_cli_json_has_photos(capsys):
     [report] = json.loads(capsys.readouterr().out)
     assert [p["title"] for p in report["photos"]] == ["冷冻室", "冷藏室"]
     assert report["scene"] is None
+
+
+# ---------- 门用完就关、台账里的加热参数 ----------
+
+
+def _open_doors_over_time(world, steps):
+    """按步骤记下每一刻开着的门，用来检查有没有两扇门一起开着。"""
+    open_now, worst = set(world.opened_by_robot), set()
+    for s in steps:
+        if s.skill == "open":
+            open_now.add(s.args["fixture"])
+        elif s.skill == "close":
+            open_now.discard(s.args["fixture"])
+        if len(open_now) > len(worst):
+            worst = set(open_now)
+    return worst
+
+
+def test_fridge_doors_are_not_open_together(world):
+    """Mac 实测：补全后冷冻门和冷藏门一直开着，最后才一起关。"""
+    thaw = [{"skill": "pick", "args": {"container": "box_f1"}},
+            {"skill": "place", "args": {"container": "box_f1", "location": "chiller", "slot": 3}}]
+    steps = normalize([Step(**x) for x in thaw], world)
+    assert len(_open_doors_over_time(world, steps)) == 1
+    skills = [(s.skill, s.args.get("fixture")) for s in steps]
+    assert skills.index(("close", "freezer_door")) < skills.index(("open", "chiller_door"))
+    look = [{"skill": "inspect", "args": {"location": "freezer"}}, {"skill": "inspect", "args": {"location": "chiller"}}]
+    other = fresh_world(SPEC)
+    steps = normalize([Step(**x) for x in look], other)
+    assert len(_open_doors_over_time(other, steps)) == 1
+    assert simulate(other, steps).ok
+
+
+def test_door_stays_open_while_still_needed(world):
+    """洗碗机里还有碗要拿就先别关，拿完最后一个再关。"""
+    model = []
+    for bowl, slot in (("bowl_1", 0), ("bowl_2", 1)):
+        model += [{"skill": "pick", "args": {"container": bowl}},
+                  {"skill": "place", "args": {"container": bowl, "location": "dish_cabinet", "slot": slot}}]
+    steps = normalize([Step(**x) for x in model], world)
+    assert [s.args["fixture"] for s in steps if s.skill == "open"].count("dishwasher_door") == 1
+    assert simulate(world, steps).ok
+
+
+def test_rule_planner_uses_cook_settings_from_ledger(world):
+    world.home.find_item("鸡米花").cook["air_fry"] = {"minutes": 9, "temp_c": 170}
+    steps = RulePlanner().plan("把鸡米花放进空气炸锅并启动", world)
+    assert steps[-1].args["params"] == {"minutes": 9, "temp_c": 170}
+    steps = RulePlanner().plan("把牛肉拿出来解冻", fresh_world(SPEC))
+    assert steps[-1].args["params"]["minutes"] == fresh_world(SPEC).home.find_item("牛肉").cook["defrost"]["minutes"]
+
+
+def test_air_fry_check_flags_wrong_time(world):
+    model = [{"skill": "pick", "args": {"container": "jar_f1"}},
+             {"skill": "pour", "args": {"container": "jar_f1", "into": "air_fryer"}},
+             {"skill": "appliance", "args": {"appliance": "air_fryer", "action": "air_fry", "params": {"minutes": 20, "temp_c": 180}}}]
+    steps = normalize([Step(**x) for x in model], world)
+    s = Scheduler(world, FixedPlan(steps))
+    s.submit(TASKS[2].instruction)
+    [report] = s.run_pending()
+    assert report.ok, report.render()
+    assert any("时间温度不对" in p for p in TASKS[2].check(world, report))
+
+
+def test_context_has_cook_settings(world):
+    ctx = describe_world(world)
+    chicken = next(i for i in ctx["items"] if i["name"] == "鸡米花")
+    assert chicken["cook"] == {"air_fry": {"minutes": 12, "temp_c": 180}}
+
+
+@pytest.mark.parametrize("cook,match", [
+    ({"bake": {"minutes": 10}}, "没有家电能做 bake"),
+    ({"air_fry": {"minutes": 12, "temp_c": 260}}, "超出家电上限"),
+    ({"air_fry": 12}, "参数要写成对象"),
+])
+def test_bad_cook_settings_are_rejected(raw, cook, match):
+    next(i for i in raw["items"] if i["name"] == "鸡米花")["cook"] = cook
+    with pytest.raises(SpecError, match=match):
+        parse_home(raw)

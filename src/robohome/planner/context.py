@@ -64,7 +64,8 @@ def describe_world(world: World) -> dict:
             for c in home.containers.values()
         ],
         "items": [
-            {"id": i.id, "name": i.name, "aliases": i.aliases, "category": i.category, "container": i.container}
+            {"id": i.id, "name": i.name, "aliases": i.aliases, "category": i.category, "container": i.container,
+             **({"cook": i.cook} if i.cook else {})}
             for i in home.items.values()
         ],
         "appliances": [

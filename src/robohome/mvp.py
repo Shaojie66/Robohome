@@ -93,9 +93,15 @@ def _check_air_fry(world: World, report: Report) -> list[str]:
     chicken = world.home.find_item("鸡米花")
     if not chicken or chicken.container != "air_fryer":
         problems.append("鸡米花没有倒进空气炸锅")
-    status = world.appliances["air_fryer"].status()
+    fryer = world.appliances["air_fryer"]
+    status = fryer.status()
     if not (status.get("running") and status.get("mode") == "air_fry"):
         problems.append("空气炸锅没有启动")
+    elif chicken and chicken.cook.get("air_fry"):
+        want = chicken.cook["air_fry"]
+        got = {k: fryer.last_params.get(k) for k in want}
+        if got != want:
+            problems.append(f"时间温度不对：台账写的是 {want}，实际是 {got}")
     jar = world.home.containers["jar_f1"]
     if jar.location != "freezer":
         problems.append(f"密封罐没有放回冷冻室（在 {jar.location}）")

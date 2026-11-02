@@ -108,13 +108,14 @@ class RulePlanner:
         if microwave is None:
             raise PlanningError("家里没有能解冻的家电")
         container = self._item_container(instruction, world)
+        minutes = world.home.find_item(instruction).cook.get("defrost", {}).get("minutes", DEFAULT_DEFROST_MINUTES)
         b = Builder(world)
         source, _ = b.where[container]
         b.pick(container)
         b.close_area(source)
         b.place(container, microwave.id, 0)
         b.close_area(microwave.id)
-        b.call(microwave.id, "defrost", {"minutes": DEFAULT_DEFROST_MINUTES})
+        b.call(microwave.id, "defrost", {"minutes": minutes})
         return b.finish()
 
     # ---- 3. 空气炸锅 ----
@@ -124,8 +125,9 @@ class RulePlanner:
         if fryer is None:
             raise PlanningError("家里没有能直接倒进去的空气炸锅")
         container = self._item_container(instruction, world)
-        minutes = _number(instruction, r"(\d+)\s*分钟") or DEFAULT_FRY["minutes"]
-        temp = _number(instruction, r"(\d+)\s*度") or DEFAULT_FRY["temp_c"]
+        recipe = {**DEFAULT_FRY, **world.home.find_item(instruction).cook.get("air_fry", {})}
+        minutes = _number(instruction, r"(\d+)\s*分钟") or recipe["minutes"]
+        temp = _number(instruction, r"(\d+)\s*度") or recipe["temp_c"]
         b = Builder(world)
         source, slot = b.where[container]
         b.pick(container)
