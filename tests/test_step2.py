@@ -228,8 +228,13 @@ def test_save_and_reload_round_trip(world, tmp_path):
 
 def test_cli_intake(capsys, tmp_path):
     out = tmp_path / "home.json"
+    # 不加 --yes 只预览，不写文件
     assert main(["intake", "买了两盒酸奶", "--save", str(out)]) == 0
-    assert "冷藏盒 1 号" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "冷藏盒 1 号" in printed and "只是预览" in printed
+    assert not out.exists()
+    assert main(["intake", "买了两盒酸奶", "--save", str(out), "--yes"]) == 0
+    assert "台账已写入" in capsys.readouterr().out
     assert any(i.name == "酸奶" for i in load_home(out).items.values())
     assert main(["intake", "买了一包薯片"]) == 1
 

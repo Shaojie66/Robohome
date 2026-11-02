@@ -14,7 +14,7 @@ robohome run "把牛肉拿出来解冻"          # 端到端跑一条指令
 robohome run "把牛肉拿出来解冻" --fault offline:microwave   # 注入故障：家电离线
 robohome run "把牛肉拿出来解冻" --fault missing:box_f1      # 注入故障：台账和现实不一致
 robohome skills                         # 列出技能清单（带参数 Schema，规划层用它约束大模型）
-robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"   # 入库：识别并分配容器
+robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"   # 入库：识别并分配容器（只预览）
 pytest
 ```
 
@@ -29,13 +29,24 @@ robohome run "..." --planner local --model qwen3:14b --base-url http://192.168.1
 
 任何兼容 OpenAI Chat Completions 接口的本地服务都能用（llama.cpp server、vLLM、LM Studio），用 `--base-url` 指过去即可；也可以设环境变量 `ROBOHOME_LLM_BASE_URL`、`ROBOHOME_LLM_MODEL`。
 
+本地模型用流式返回：第一个字之前最多等 3 分钟（冷启动要先把模型读进内存），开始出字后 60 秒没有新输出就判定卡住；卡住或连接中途断开会自动重试一次，整次请求超过 5 分钟直接报错。
+
 用 Claude 规划和识别（需要 `pip install -e ".[claude]"` 和 `ANTHROPIC_API_KEY`）：
 
 ```bash
 robohome run "牛肉化一下，晚上要用" --planner claude
 robohome intake "刚从超市回来，买了排骨、虾仁和一箱牛奶" --recognizer claude
-robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
+robohome intake --recognizer claude --image receipt.jpg
 ```
+
+入库默认只预览，台账不动。确认分配结果没问题后，加 `--save` 和 `--yes` 才写进台账；仓库自带的样例文件不会被改写（除非加 `--force`），先复制一份自己的：
+
+```bash
+cp data/kitchen_example.json my_home.json
+robohome intake "买了一箱牛奶" --spec my_home.json --save my_home.json --yes
+```
+
+识别照片要用能看图的模型（如 `qwen2.5vl:7b`），用纯文字模型时会先提示换模型，不会白跑一趟。
 
 运行示例：
 
@@ -67,6 +78,8 @@ robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
 
 每一步执行前依次过三道关：**安全规则 → 技能前置条件 → 执行**，任何一关失败立刻停下并回报，不猜、不重试。
 
+停下之后做一次**安全收尾**：把机器人自己打开、还没关上的门关好（收尾动作同样过安全规则和前置条件）。关不上的门会在回报里单独列出"需要人处理"。
+
 ### 大模型规划器怎么工作
 
 1. 把技能清单（带参数 Schema）和当前世界状态交给大模型，用结构化输出约束它只能返回合法的技能调用；做不到时它会说明原因
@@ -78,7 +91,12 @@ robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
 
 ### 入库怎么分配容器
 
-温区必须对上；已经装着同类、还放得下的容器优先，尽量装满一个再开下一个；一个容器只装一个类别；放不下就如实报告，不硬塞。分配完直接写进台账，新物品马上能被规划器找到。
+温区必须对上；已经装着同类、还放得下的容器优先，尽量装满一个再开下一个；一个容器只装一个类别；一个容器装不下（比如一箱牛奶）就分装到几个同温区的容器里；还是放不下就如实报告，不硬塞。
+
+两种识别器：
+
+- **关键词识别（默认）**：只用来演示和测试。只认一张小词表，能读"两盒""一箱""3斤"这类数量；"糖醋里脊""玉米""牛奶糖"这类关键词表判断不了的说法一律交给主人确认，宁可不认也不乱放
+- **大模型识别**：能处理任意说法和照片。模型给出的每件物品都会再检查一遍（温区、体积是否合理），不合格的不入账，列给主人确认
 
 ## 安全原则
 
@@ -87,6 +105,8 @@ robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
 - 离开一个点位前，机器人在这里打开的门要先关上；任务结束时机器人打开过的门必须都关好
 - 进微波炉的容器必须标记为微波炉可用
 - 手里拿着东西时不启动带危险的家电
+- 启动带危险的家电必须给出运行分钟数，范围 1 到家电的 `max_minutes`（在规范文件里配置，默认 30）
+- 读不到家电状态时按"可能正在运行"处理，不去接触它
 
 机器人只负责"开启和传递"，加热、切割等工作由家电自己完成，就像调用一个封装好的函数。
 
@@ -94,5 +114,5 @@ robohome intake --recognizer claude --image receipt.jpg --save data/my_home.json
 
 1. 数据层 + 技能接口 + 最小调度链路 ✓
 2. 大模型规划层 + 入库模块 ✓
-3. 调度器完善 + MVP 五个任务端到端，系统性故障测试
+3. 调度器完善 + MVP 五个任务端到端，系统性故障测试（进行中：已补齐失败后安全收尾、加热时长上限、本地模型连接的超时与重试）
 4. 仿真：把技能库换成 MuJoCo / Isaac Sim 实现，规划和调度代码不动

@@ -24,8 +24,10 @@ SPEC = Path(__file__).resolve().parents[1] / "data" / "kitchen_example.json"
 class StubServer:
     """按顺序返回预设的 content 文本，记录收到的请求体。"""
 
-    def __init__(self, contents, status=200, finish_reason="stop", stall_first=0.0):
+    def __init__(self, contents, status=200, finish_reason="stop", stall_first=0.0, capabilities=None, script=None):
         self.contents = list(contents)
+        self.capabilities = capabilities  # /api/show 返回的模型能力；None 表示不是 Ollama（404）
+        self.script = script  # 自定义流式输出：给定时按它写原始字节，用来模拟断线等异常
         self.requests = []
         self.stall_first = stall_first  # 第一次请求先卡住这么多秒（模拟 Ollama 挂住）
         stub = self
@@ -34,6 +36,20 @@ class StubServer:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 stub.requests.append({"path": self.path, "body": body, "auth": self.headers.get("Authorization")})
+                if self.path == "/api/show":
+                    caps = stub.capabilities
+                    data = json.dumps({"capabilities": caps} if caps is not None else {"error": "not found"}).encode()
+                    self.send_response(200 if caps is not None else 404)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                if stub.script is not None and body.get("stream"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    stub.script(self, len(stub.requests))
+                    return
                 if stub.stall_first and len(stub.requests) == 1:
                     time.sleep(stub.stall_first)
                     return
@@ -166,7 +182,8 @@ def test_local_recognizer_and_api_key(tmp_path):
     finally:
         server.close()
     assert items[0].name == "虾仁"
-    req = server.requests[0]
+    assert server.requests[0]["path"] == "/api/show"  # 先问能不能看图；不是 Ollama 就照常尝试
+    req = server.requests[1]
     assert req["auth"] == "Bearer secret"
     content = req["body"]["messages"][1]["content"]
     assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")

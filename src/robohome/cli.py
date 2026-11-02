@@ -6,8 +6,9 @@
     robohome run "把牛肉拿出来解冻" --fault missing:box_f1
     robohome run "把牛肉拿出来解冻" --planner local       # 用本地模型规划（默认 Ollama + qwen3:8b）
     robohome run "把牛肉拿出来解冻" --planner claude      # 用 Claude 规划（需要 ANTHROPIC_API_KEY）
-    robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"
-    robohome intake "..." --recognizer claude --image receipt.jpg --save data/my_home.json
+    robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"           # 只预览，不改台账
+    robohome intake "..." --spec my_home.json --save my_home.json --yes  # 确认后写入台账
+    robohome intake --recognizer local --model qwen2.5vl:7b --image receipt.jpg
     robohome skills
 """
 
@@ -21,6 +22,7 @@ from pathlib import Path
 from .appliances.base import MockAppliance
 from .intake.core import assign
 from .intake.recognize import KeywordRecognizer, LLMRecognizer
+from .llm.base import LLMError
 from .planner.base import Planner
 from .planner.rules import RulePlanner
 from .scheduler.core import Scheduler
@@ -61,6 +63,44 @@ def _start_world(home) -> World:
     return World.from_home(home, start_waypoint="entrance" if "entrance" in first_room.waypoints else None)
 
 
+def _step_json(s) -> dict:
+    return {"step": s.step.describe(), "ok": s.ok, "stage": s.stage, "message": s.message}
+
+
+def _intake(args, home, world: World) -> int:
+    if args.save and Path(args.save).resolve() == DEFAULT_SPEC.resolve() and not args.force:
+        print(f"不会改写仓库自带的样例文件 {DEFAULT_SPEC.name}；先复制一份再用，或者加 --force", file=sys.stderr)
+        return 2
+    if args.image and not Path(args.image).is_file():
+        print(f"找不到照片：{args.image}", file=sys.stderr)
+        return 2
+    if args.recognizer in ("local", "claude"):
+        from .llm import make_backend
+
+        categories = sorted({it.category for it in home.items.values()})
+        try:
+            backend = make_backend(args.recognizer, args.model, args.base_url, effort="low")
+            items, unknown = LLMRecognizer(backend).recognize(args.text, args.image, categories)
+        except (LLMError, RuntimeError) as e:
+            print(e, file=sys.stderr)
+            return 2
+    else:
+        if args.image:
+            print("识别照片需要 --recognizer local 或 claude", file=sys.stderr)
+            return 2
+        items, unknown = KeywordRecognizer().recognize(args.text)
+    result = assign(world, items)
+    result.unrecognized = unknown
+    print(result.render(world))
+    if args.save:
+        if args.yes:
+            save_home(world.home, args.save)
+            print(f"台账已写入 {args.save}")
+        else:
+            print(f"以上只是预览，台账没有改动。确认无误后加 --yes 写入 {args.save}")
+    return 0 if result.ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="robohome", description="家庭专属机器人管家（模拟运行）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -85,7 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--image", help="小票或购物袋照片（需要 local 视觉模型或 claude）")
     i.add_argument("--model", help="模型名；local 默认 qwen3:8b，claude 默认 claude-opus-5-5")
     i.add_argument("--base-url", help="本地模型服务地址，默认 http://localhost:11434/v1（Ollama）")
-    i.add_argument("--save", help="把更新后的台账写到这个文件")
+    i.add_argument("--save", help="把更新后的台账写到这个文件（要加 --yes 才真正写入）")
+    i.add_argument("--yes", action="store_true", help="确认写入台账；不加时只预览")
+    i.add_argument("--force", action="store_true", help="允许覆盖仓库自带的样例文件")
 
     sub.add_parser("skills", help="列出技能清单")
 
@@ -109,32 +151,16 @@ def main(argv: list[str] | None = None) -> int:
     world = _start_world(home)
 
     if args.cmd == "intake":
-        if args.recognizer in ("local", "claude"):
-            from .llm import make_backend
-
-            categories = sorted({it.category for it in home.items.values()})
-            backend = make_backend(args.recognizer, args.model, args.base_url, effort="low")
-            try:
-                items, unknown = LLMRecognizer(backend).recognize(args.text, args.image, categories)
-            except RuntimeError as e:
-                print(e, file=sys.stderr)
-                return 2
-        else:
-            if args.image:
-                print("识别照片需要 --recognizer local 或 claude", file=sys.stderr)
-                return 2
-            items, unknown = KeywordRecognizer().recognize(args.text)
-        result = assign(world, items)
-        result.unrecognized = unknown
-        print(result.render(world))
-        if args.save:
-            save_home(world.home, args.save)
-            print(f"台账已写入 {args.save}")
-        return 0 if result.ok else 1
+        return _intake(args, home, world)
 
     for f in args.fault:
         _apply_fault(world, f)
-    scheduler = Scheduler(world, _make_planner(args.planner, args.model, args.base_url))
+    try:
+        planner = _make_planner(args.planner, args.model, args.base_url)
+    except LLMError as e:
+        print(e, file=sys.stderr)
+        return 2
+    scheduler = Scheduler(world, planner)
     for ins in args.instructions:
         scheduler.submit(ins)
     reports = scheduler.run_pending()
@@ -142,7 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps([
             {"instruction": r.instruction, "ok": r.ok, "summary": r.summary,
-             "steps": [{"step": s.step.describe(), "ok": s.ok, "stage": s.stage, "message": s.message} for s in r.results],
+             "steps": [_step_json(s) for s in r.results],
+             "cleanup": [_step_json(s) for s in r.cleanup],
+             "needs_attention": r.needs_attention,
              "final_state": r.final_state}
             for r in reports
         ], ensure_ascii=False, indent=2))

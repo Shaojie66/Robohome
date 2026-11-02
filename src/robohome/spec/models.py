@@ -80,6 +80,7 @@ class Appliance:
     capabilities: list[str] = field(default_factory=list)
     hazards: list[Literal["heat", "blade"]] = field(default_factory=list)
     endpoint: str = "mock://"  # 真实接入时换成 Home Assistant / 米家地址
+    max_minutes: int = 30  # 危险动作单次最长运行分钟数，超过就拒绝
 
 
 @dataclass
