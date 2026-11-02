@@ -232,3 +232,24 @@ def test_cli_intake(capsys, tmp_path):
     assert "冷藏盒 1 号" in capsys.readouterr().out
     assert any(i.name == "酸奶" for i in load_home(out).items.values())
     assert main(["intake", "买了一包薯片"]) == 1
+
+
+def test_hazard_appliance_requires_run_time(world):
+    """Mac 上用 qwen3:8b 实测时，模型把解冻时间留空了；这种计划必须在预演里被拦下。"""
+    plan_no_time = [dict(s) for s in GOOD_PLAN]
+    plan_no_time[-1] = {"skill": "appliance",
+                        "args": {"appliance": "microwave", "action": "defrost", "params": {"minutes": None}}}
+    report = simulate(world, [Step(**s) for s in plan_no_time])
+    assert not report.ok
+    assert report.results[-1].stage == "precondition"
+    assert "运行分钟数" in report.results[-1].message
+
+
+def test_llm_replans_when_run_time_missing(world):
+    plan_no_time = [dict(s) for s in GOOD_PLAN]
+    plan_no_time[-1] = {"skill": "appliance",
+                        "args": {"appliance": "microwave", "action": "defrost", "params": {"minutes": None}}}
+    client = FakeClient(plan(plan_no_time), plan(GOOD_PLAN))
+    steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
+    assert steps[-1].args["params"] == {"minutes": 8}
+    assert "运行分钟数" in client.calls[1]["messages"][2]["content"]

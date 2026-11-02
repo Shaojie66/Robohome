@@ -152,12 +152,18 @@ def _run_place(world: World, container: str, location: str, slot: int = 0) -> st
 # ---------- appliance ----------
 
 
+STOP_ACTIONS = ("stop", "off")
+
+
 def _check_appliance(world: World, appliance: str, action: str, params: dict | None = None) -> str | None:
     a = world.home.appliances.get(appliance)
     if a is None:
         return f"家电 {appliance} 不存在"
     if action not in a.capabilities:
         return f"{a.name}不支持 {action}"
+    # 加热、切割这类有危险的动作必须给出运行时间，不能让家电无限期运行
+    if a.hazards and action not in STOP_ACTIONS and not (params or {}).get("minutes"):
+        return f"启动{a.name} {action} 必须指定运行分钟数（params.minutes）"
     return None
 
 
@@ -231,7 +237,7 @@ SKILLS: dict[str, Skill] = {
                 "params": {
                     "type": "object",
                     "description": "动作参数",
-                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数，不需要时填 null")},
+                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数；启动加热等危险动作时必填，停止时填 null")},
                     "required": ["minutes"],
                     "additionalProperties": False,
                 },
