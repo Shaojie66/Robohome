@@ -66,6 +66,7 @@ class Item:
     category: str
     container: str
     aliases: list[str] = field(default_factory=list)
+    volume_l: float = 0.0  # 占用容器的体积，入库分配容器时用
 
 
 @dataclass

@@ -27,6 +27,8 @@ class World:
     appliances: dict[str, ApplianceAdapter] = field(default_factory=dict)
     # 模拟"台账和现实不一致"：这些容器台账里有，实际去拿时找不到
     missing_containers: set[str] = field(default_factory=set)
+    # 机器人自己打开、还没关上的门；离开前和任务结束时都要关好
+    opened_by_robot: set[str] = field(default_factory=set)
 
     @classmethod
     def from_home(cls, home: Home, start_room: str | None = None, start_waypoint: str | None = None) -> World:
@@ -59,11 +61,39 @@ class World:
                 return c.id
         return None
 
+    def sandbox(self) -> World:
+        """复制一份用来预演计划的世界：家和机器人状态照搬，家电换成同状态的模拟家电。
+
+        预演只知道台账里写的东西，所以不带 missing_containers；家电默认在线。
+        """
+        adapters: dict[str, ApplianceAdapter] = {}
+        for a in self.home.appliances.values():
+            status = {}
+            try:
+                status = self.appliances[a.id].status()
+            except Exception:
+                pass
+            adapters[a.id] = MockAppliance(
+                appliance_id=a.id,
+                capabilities=list(a.capabilities),
+                running=bool(status.get("running")),
+                mode=status.get("mode"),
+            )
+        world = World(
+            home=copy.deepcopy(self.home),
+            robot=copy.deepcopy(self.robot),
+            appliances=adapters,
+            opened_by_robot=set(self.opened_by_robot),
+        )
+        world.sync_appliance_doors()
+        return world
+
     def snapshot(self) -> dict:
         """给日志和回报用的简要状态。"""
         return {
             "robot": f"{self.robot.room}/{self.robot.waypoint}",
             "holding": self.robot.holding,
             "open_fixtures": [f.id for f in self.home.fixtures.values() if f.state == "open"],
+            "opened_by_robot": sorted(self.opened_by_robot),
             "appliances": {k: v.status() for k, v in self.appliances.items()},
         }

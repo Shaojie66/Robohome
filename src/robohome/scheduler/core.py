@@ -41,6 +41,11 @@ class Report:
         return "\n".join(lines)
 
 
+def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None) -> Report:
+    """在世界的副本上预演计划，不改动真实世界。规划层用它在执行前发现问题。"""
+    return Scheduler(world.sandbox(), planner=None, rules=rules).execute("预演", plan)  # type: ignore[arg-type]
+
+
 class Scheduler:
     def __init__(self, world: World, planner: Planner, rules: list[Rule] | None = None):
         self.world = world
@@ -78,7 +83,13 @@ class Scheduler:
                 report.summary = f"第 {i + 1} 步（{step.describe()}）{result.message}"
                 break
         else:
-            report.summary = f"共 {len(plan)} 步"
+            # 收尾检查：机器人打开的门在任务结束时必须都关上
+            left_open = [self.world.home.fixtures[f].name for f in sorted(self.world.opened_by_robot)]
+            if left_open:
+                report.ok = False
+                report.summary = f"计划结束时{'、'.join(left_open)}还开着，需要关上"
+            else:
+                report.summary = f"共 {len(plan)} 步"
         report.final_state = self.world.snapshot()
         return report
 
