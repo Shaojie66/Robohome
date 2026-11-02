@@ -30,6 +30,7 @@ from test_local_llm import StubServer, plan_text
 from test_step2 import GOOD_PLAN
 
 SPEC = Path(__file__).resolve().parents[1] / "data" / "kitchen_example.json"
+SAMPLE_ITEMS = 7  # 样例厨房台账里的物品数
 
 
 @pytest.fixture
@@ -116,7 +117,7 @@ def test_failure_reports_door_it_could_not_close(world):
     [report] = s.run_pending()
     assert not report.ok
     assert report.cleanup and not report.cleanup[-1].ok
-    assert report.needs_attention == ["冷冻室门"]
+    assert report.needs_attention == ["冷冻室门还开着"]
     assert "需要人处理：冷冻室门还开着" in report.render()
 
 
@@ -332,13 +333,13 @@ def test_split_never_mixes_categories(world):
     # 只有冷藏盒 3 号是空的，另外两个分别装着牛奶和鸡蛋，不能混装
     assert not result.ok
     assert [p.container for p in result.placements] == [None]
-    assert len(world.home.items) == 5  # 整件放不下就不拆，台账不动
+    assert len(world.home.items) == SAMPLE_ITEMS  # 整件放不下就不拆，台账不动
 
 
 def test_preview_on_sandbox_leaves_ledger_alone(world):
     preview = assign(world.sandbox(), [milk(1.0)])
     assert preview.ok
-    assert len(world.home.items) == 5
+    assert len(world.home.items) == SAMPLE_ITEMS
 
 
 # ---------- 本地模型：流式连接的各种异常 ----------
@@ -674,4 +675,4 @@ def test_saved_ledger_is_compact_and_loads_back(tmp_path):
 
 def test_sample_file_is_unchanged_by_test_suite():
     # 防止哪个测试误写了仓库自带的样例
-    assert len(load_home(DEFAULT_SPEC).items) == 5
+    assert len(load_home(DEFAULT_SPEC).items) == SAMPLE_ITEMS

@@ -23,6 +23,27 @@ class RobotState:
     holding: str | None = None  # 手里拿着的容器 id
 
 
+FLOOR = "floor"  # 搬运途中掉下去的容器的位置
+
+
+@dataclass
+class Photo:
+    """模拟相机拍的一张照片：看到了什么，以及和台账对不上的地方。仿真和真机阶段换成真实图像。"""
+
+    waypoint: str
+    location: str | None  # 拍的是哪个存放区或家电；失败时随手拍的现场照为 None
+    seen: list[str]
+    notes: list[str] = field(default_factory=list)
+    title: str = ""  # 给人看的名字，如"冷冻室"
+
+    def describe(self) -> str:
+        where = self.title or self.location or self.waypoint
+        text = f"{where}：" + ("、".join(self.seen) if self.seen else "空的")
+        if self.notes:
+            text += "；" + "；".join(self.notes)
+        return text
+
+
 @dataclass
 class World:
     home: Home
@@ -32,6 +53,12 @@ class World:
     missing_containers: set[str] = field(default_factory=set)
     # 机器人自己打开、还没关上的门；离开前和任务结束时都要关好
     opened_by_robot: set[str] = field(default_factory=set)
+    # 以下几种也是故障注入用：门卡住、搬运途中会滑落的容器、台账里没有的东西
+    stuck_fixtures: set[str] = field(default_factory=set)
+    slippery: set[str] = field(default_factory=set)
+    unknown_objects: dict[str, list[str]] = field(default_factory=dict)
+    photos: list[Photo] = field(default_factory=list)  # 这次任务拍的照片
+    notices: list[str] = field(default_factory=list)  # 执行中发现、需要告诉主人的事
 
     @classmethod
     def from_home(cls, home: Home, start_room: str | None = None, start_waypoint: str | None = None) -> World:
@@ -66,6 +93,60 @@ class World:
                 return c.id
         return None
 
+    def free_slot(self, location: str, prefer: int | None = None) -> int | None:
+        """存放区或家电里第一个空槽位；prefer 空着就用 prefer。"""
+        if location in self.home.storage:
+            n = self.home.storage[location].slots
+        elif location in self.home.appliances:
+            n = self.home.appliances[location].slots
+        else:
+            return None
+        if prefer is not None and 0 <= prefer < n and self.container_at(location, prefer) is None:
+            return prefer
+        return next((i for i in range(n) if self.container_at(location, i) is None), None)
+
+    def _contents(self, container_id: str) -> list[str]:
+        return [i.name for i in self.home.items.values() if i.container == container_id]
+
+    def _label(self, container_id: str) -> str:
+        c = self.home.containers[container_id]
+        contents = self._contents(container_id)
+        return f"{c.name}（{'、'.join(contents)}）" if contents else c.name
+
+    def look(self, location: str) -> Photo:
+        """拍一张存放区或家电内部的照片。模拟实现：按台账"看到"东西，再把注入的故障体现出来。"""
+        home = self.home
+        seen, notes = [], []
+        for c in sorted(home.containers.values(), key=lambda c: c.slot):
+            if c.location != location:
+                continue
+            if c.id in self.missing_containers:
+                notes.append(f"台账里有{c.name}，照片里没看到")
+                continue
+            seen.append(self._label(c.id))
+            area = home.storage.get(location)
+            if area and area.kind == "surface" and c.home is None:
+                notes.append(f"{c.name}没有登记原位，不知道该放回哪里")
+        seen += [i.name for i in home.items.values() if i.container == location]  # 倒进家电里的食物
+        unknown = self.unknown_objects.get(location, [])
+        if unknown:
+            notes.append(f"有台账里没有的东西：{'、'.join(unknown)}")
+        area = home.storage.get(location) or home.appliances.get(location)
+        return Photo(self.robot.waypoint, location, seen, notes, title=area.name if area else location)
+
+    def scene_photo(self) -> Photo:
+        """出问题时在当前位置拍一张现场照：手里拿着什么、这里的门开着没、地上有没有掉落的东西。"""
+        home = self.home
+        here = self.robot.waypoint
+        seen = []
+        if self.robot.holding:
+            seen.append(f"手里拿着{self._label(self.robot.holding)}")
+        for f in home.fixtures.values():
+            if f.waypoint == here:
+                seen.append(f"{f.name}{'开着' if f.state == 'open' else '关着'}")
+        seen += [f"地上有{self._label(c.id)}" for c in home.containers.values() if c.location == FLOOR]
+        return Photo(here, None, seen, title=f"现场（{here}）")
+
     def sandbox(self) -> World:
         """复制一份用来预演计划的世界：家和机器人状态照搬，家电换成同状态的模拟家电。
 
@@ -88,6 +169,7 @@ class World:
                 running=bool(status.get("running")),
                 mode=status.get("mode"),
             )
+        # 门卡住、东西会滑落这类故障预演时也不知道，和 missing_containers 一样不带过去
         world = World(
             home=copy.deepcopy(self.home),
             robot=copy.deepcopy(self.robot),

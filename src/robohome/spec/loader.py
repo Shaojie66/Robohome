@@ -74,7 +74,11 @@ def parse_home(data: dict) -> Home:
                 location=c["location"],
                 slot=c.get("slot", 0),
                 pose=_pose(c.get("pose")),
-                microwave_safe=c.get("microwave_safe", False),
+                kind=c.get("kind", "box"),
+                # 旧格式用 microwave_safe: true，等价于 safe_for: ["microwave"]
+                safe_for=sorted(set(c.get("safe_for", [])) | ({"microwave"} if c.get("microwave_safe") else set())),
+                home=c.get("home"),
+                home_slot=c.get("home_slot"),
             )
             for c in data.get("containers", [])
         ]
@@ -118,21 +122,37 @@ def validate(home: Home) -> None:
     for s in home.storage.values():
         if s.room not in home.rooms:
             errors.append(f"存放区 {s.id}: 房间 {s.room} 不存在")
+        if s.waypoint:
+            waypoint_ok(s.room, s.waypoint, f"存放区 {s.id}")
+        elif home.fixture_enclosing(s.id) is None:
+            errors.append(f"存放区 {s.id}: 没有门也没有写 waypoint，机器人不知道站在哪里取放")
+
+    def slots_of(location: str) -> int | None:
+        if location in home.storage:
+            return home.storage[location].slots
+        if location in home.appliances:
+            return home.appliances[location].slots
+        return None
 
     used: dict[tuple[str, int], str] = {}
     for c in home.containers.values():
-        if c.location in home.storage:
-            if not 0 <= c.slot < home.storage[c.location].slots:
-                errors.append(f"容器 {c.id}: 槽位 {c.slot} 超出 {c.location} 的范围")
-        elif c.location not in home.appliances:
+        n = slots_of(c.location)
+        if n is None:
             errors.append(f"容器 {c.id}: 位置 {c.location} 不存在")
+        elif not 0 <= c.slot < n:
+            errors.append(f"容器 {c.id}: 槽位 {c.slot} 超出 {c.location} 的范围")
         key = (c.location, c.slot)
         if key in used:
             errors.append(f"容器 {c.id} 和 {used[key]} 占了同一个槽位")
         used[key] = c.id
+        if c.home is not None:
+            if c.home not in home.storage:
+                errors.append(f"容器 {c.id}: 原位 {c.home} 不是存放区")
+            elif c.home_slot is not None and not 0 <= c.home_slot < home.storage[c.home].slots:
+                errors.append(f"容器 {c.id}: 原位槽位 {c.home_slot} 超出 {c.home} 的范围")
 
     for i in home.items.values():
-        if i.container not in home.containers:
+        if i.container not in home.containers and i.container not in home.appliances:
             errors.append(f"物品 {i.id}: 容器 {i.container} 不存在")
 
     for a in home.appliances.values():

@@ -3,7 +3,7 @@
 原则（来自方案文档）：
 - 机器人不进禁区
 - 机器人不直接接触热源和刀具：家电运行时不开它的门、不从里面取放东西
-- 进微波炉的容器必须是微波炉可用的
+- 放进加热家电（微波炉、空气炸锅……）的容器必须标明能进这种家电
 - 手里拿着东西时不调用带危险的家电，避免边拿边启动
 
 规则和技能分开写，这样换仿真或真机时规则一行不用改。
@@ -35,8 +35,10 @@ def no_touching_running_hazard(world: World, skill: str, args: dict) -> str | No
     elif skill == "pick":
         c = world.home.containers.get(args.get("container", ""))
         target = c.location if c else None
-    elif skill == "place":
+    elif skill in ("place", "inspect"):
         target = args.get("location")
+    elif skill == "pour":
+        target = args.get("into")
     a = world.home.appliances.get(target or "")
     if not (a and a.hazards):
         return None
@@ -48,14 +50,15 @@ def no_touching_running_hazard(world: World, skill: str, args: dict) -> str | No
     return None
 
 
-def microwave_safe_only(world: World, skill: str, args: dict) -> str | None:
+def heat_safe_containers_only(world: World, skill: str, args: dict) -> str | None:
     if skill != "place":
         return None
     a = world.home.appliances.get(args.get("location", ""))
     c = world.home.containers.get(args.get("container", ""))
-    if a and a.kind == "microwave" and c and not c.microwave_safe:
-        return f"{c.name}不能进微波炉"
+    if a and "heat" in a.hazards and c and a.kind not in c.safe_for:
+        return f"{c.name}不能进{a.name}"
     return None
+
 
 
 def hands_free_before_hazard(world: World, skill: str, args: dict) -> str | None:
@@ -83,7 +86,7 @@ def close_doors_before_leaving(world: World, skill: str, args: dict) -> str | No
 DEFAULT_RULES: list[Rule] = [
     no_forbidden_zone,
     no_touching_running_hazard,
-    microwave_safe_only,
+    heat_safe_containers_only,
     hands_free_before_hazard,
     close_doors_before_leaving,
 ]

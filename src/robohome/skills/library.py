@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..appliances.base import ApplianceError
-from ..world import World
+from ..world import FLOOR, World
 
 HELD = "robot"  # 容器被拿在手里时的位置
 
@@ -43,8 +43,18 @@ def _waypoint_for_location(world: World, location: str) -> str | None:
     fixture = world.home.fixture_enclosing(location)
     if fixture:
         return fixture.waypoint
+    if location in world.home.storage:
+        return world.home.storage[location].waypoint
     if location in world.home.appliances:
         return world.home.appliances[location].waypoint
+    return None
+
+
+def _slots(world: World, location: str) -> int | None:
+    if location in world.home.storage:
+        return world.home.storage[location].slots
+    if location in world.home.appliances:
+        return world.home.appliances[location].slots
     return None
 
 
@@ -65,6 +75,13 @@ def _check_navigate(world: World, waypoint: str) -> str | None:
 
 
 def _run_navigate(world: World, waypoint: str) -> str:
+    held = world.robot.holding
+    if held and held in world.slippery:
+        # 搬运途中滑落：东西掉在原地，机器人停在原地，不再继续
+        c = world.home.containers[held]
+        c.location, c.slot = FLOOR, 0
+        world.robot.holding = None
+        raise SkillFailed(f"去 {waypoint} 的路上{c.name}从手里滑落")
     world.robot.waypoint = waypoint
     return f"到达 {waypoint}"
 
@@ -85,6 +102,8 @@ def _check_fixture(world: World, fixture: str, want: str) -> str | None:
 
 def _run_open(world: World, fixture: str) -> str:
     f = world.home.fixtures[fixture]
+    if fixture in world.stuck_fixtures:
+        raise SkillFailed(f"{f.name}拉不开，可能卡住了")
     f.state = "open"
     world.opened_by_robot.add(fixture)
     world.sync_appliance_doors()
@@ -93,6 +112,8 @@ def _run_open(world: World, fixture: str) -> str:
 
 def _run_close(world: World, fixture: str) -> str:
     f = world.home.fixtures[fixture]
+    if fixture in world.stuck_fixtures:
+        raise SkillFailed(f"{f.name}关不上，可能卡住了")
     f.state = "closed"
     world.opened_by_robot.discard(fixture)
     world.sync_appliance_doors()
@@ -130,11 +151,11 @@ def _run_pick(world: World, container: str) -> str:
 def _check_place(world: World, container: str, location: str, slot: int = 0) -> str | None:
     if world.robot.holding != container:
         return f"手里没有拿着 {container}"
-    if location in world.home.storage:
-        if not 0 <= slot < world.home.storage[location].slots:
-            return f"{location} 没有槽位 {slot}"
-    elif location not in world.home.appliances:
+    n = _slots(world, location)
+    if n is None:
         return f"位置 {location} 不存在"
+    if not isinstance(slot, int) or not 0 <= slot < n:
+        return f"{location} 没有槽位 {slot}（共 {n} 个，从 0 开始）"
     if err := _at(world, _waypoint_for_location(world, location)):
         return err
     if err := _enclosure_open(world, location):
@@ -148,7 +169,52 @@ def _run_place(world: World, container: str, location: str, slot: int = 0) -> st
     c = world.home.containers[container]
     c.location, c.slot = location, slot
     world.robot.holding = None
-    return f"把{c.name}放进 {location}"
+    return f"把{c.name}放进 {location} 槽位 {slot}"
+
+
+# ---------- inspect / pour ----------
+
+
+def _check_inspect(world: World, location: str) -> str | None:
+    if _slots(world, location) is None:
+        return f"位置 {location} 不存在"
+    if err := _at(world, _waypoint_for_location(world, location)):
+        return err
+    if err := _enclosure_open(world, location):
+        return err
+    return None
+
+
+def _run_inspect(world: World, location: str) -> str:
+    photo = world.look(location)
+    world.photos.append(photo)
+    world.notices += photo.notes
+    return f"拍照：{photo.describe()}"
+
+
+def _check_pour(world: World, container: str, into: str) -> str | None:
+    if world.robot.holding != container:
+        return f"手里没有拿着 {container}"
+    a = world.home.appliances.get(into)
+    if a is None:
+        return f"家电 {into} 不存在"
+    if not a.accepts_pour:
+        return f"{a.name}不能直接倒东西进去"
+    if not any(i.container == container for i in world.home.items.values()):
+        return f"{world.home.containers[container].name}是空的"
+    if err := _at(world, a.waypoint):
+        return err
+    if err := _enclosure_open(world, into):
+        return err
+    return None
+
+
+def _run_pour(world: World, container: str, into: str) -> str:
+    moved = [i for i in world.home.items.values() if i.container == container]
+    for i in moved:
+        i.container = into
+    names = "、".join(i.name for i in moved)
+    return f"把{names}倒进{world.home.appliances[into].name}"
 
 
 # ---------- appliance ----------
@@ -171,6 +237,12 @@ def _check_appliance(world: World, appliance: str, action: str, params: dict | N
             return f"启动{a.name} {action} 必须指定运行分钟数（params.minutes，整数）"
         if not 1 <= minutes <= a.max_minutes:
             return f"{a.name} {action} 的运行时间必须在 1 到 {a.max_minutes} 分钟之间，收到 {minutes}"
+    temp = (params or {}).get("temp_c")
+    if temp is not None:
+        if a.max_temp_c is None:
+            return f"{a.name}不能设温度"
+        if not isinstance(temp, int) or isinstance(temp, bool) or not 1 <= temp <= a.max_temp_c:
+            return f"{a.name}的温度必须是 1 到 {a.max_temp_c} 之间的整数，收到 {temp}"
     return None
 
 
@@ -230,22 +302,39 @@ SKILLS: dict[str, Skill] = {
             {
                 "container": _s("string", "容器 id"),
                 "location": _s("string", "存放区或家电 id"),
-                "slot": _s("integer", "槽位序号；放进家电时填 0"),
+                "slot": _s("integer", "槽位序号，从 0 开始，必须是空的；家电只有一个位置时填 0"),
             },
             _check_place,
             _run_place,
         ),
         Skill(
+            "inspect",
+            "给存放区或家电内部拍照，看看里面有什么、和台账对不对得上（有门的要先开门）",
+            {"location": _s("string", "存放区或家电 id")},
+            _check_inspect,
+            _run_inspect,
+        ),
+        Skill(
+            "pour",
+            "把手里容器里的食物倒进家电（只限 accepts_pour 的家电，例如空气炸锅的炸篮），容器仍在手里",
+            {"container": _s("string", "容器 id"), "into": _s("string", "家电 id")},
+            _check_pour,
+            _run_pour,
+        ),
+        Skill(
             "appliance",
-            "调用联网家电的接口，例如微波炉解冻",
+            "调用联网家电的接口，例如微波炉解冻、空气炸锅启动；走网络接口，不需要站在家电旁边",
             {
                 "appliance": _s("string", "家电 id"),
                 "action": _s("string", "家电支持的动作，如 defrost"),
                 "params": {
                     "type": "object",
                     "description": "动作参数",
-                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数（整数）；启动加热等危险动作时必填且不超过家电的 max_minutes，停止时填 null")},
-                    "required": ["minutes"],
+                    "properties": {
+                        "minutes": _s(["integer", "null"], "运行分钟数（整数）；启动加热等危险动作时必填且不超过家电的 max_minutes，停止时填 null"),
+                        "temp_c": _s(["integer", "null"], "温度（摄氏度）；只有 max_temp_c 不为空的家电能设，其他填 null"),
+                    },
+                    "required": ["minutes", "temp_c"],
                     "additionalProperties": False,
                 },
             },

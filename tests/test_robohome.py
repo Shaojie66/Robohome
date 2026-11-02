@@ -163,7 +163,7 @@ def test_world_does_not_mutate_source_home():
 
 def test_catalog_lists_all_skills():
     names = {s["name"] for s in catalog()}
-    assert names == {"navigate", "open", "close", "pick", "place", "appliance"}
+    assert names == {"navigate", "open", "close", "pick", "place", "inspect", "pour", "appliance"}
 
 
 def test_cli_run_and_fault(capsys):

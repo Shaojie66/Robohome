@@ -13,7 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 claude = ["anthropic>=2.3"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "jsonschema>=4"]
 
 [project.scripts]
 robohome = "robohome.cli:main"

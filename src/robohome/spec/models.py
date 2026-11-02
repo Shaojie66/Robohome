@@ -3,8 +3,8 @@
 一个家由五类东西组成：
 - Room       房间，以及机器人可以停靠的点位（waypoint）
 - Fixture    可操作部件：柜门、抽屉、冰箱门。机器人只会开和关
-- Container  标准容器：尺寸已知、位置已知，物品都装在容器里
-- Item       物品台账：每件东西在哪个容器里
+- Container  标准容器：尺寸已知、位置已知，物品都装在容器里；碗、杯子这类要归位的东西也按容器登记
+- Item       物品台账：每件东西在哪个容器里（倒进家电后就记在家电里）
 - Appliance  联网家电：机器人只调用它的接口，内部工作由家电自己完成
 
 坐标统一用米，原点和朝向在建家时确定。
@@ -47,6 +47,9 @@ class Fixture:
     encloses: str | None = None
 
 
+FOOD_KINDS = ("box", "jar")  # 能装食物、入库时可以分配的容器种类
+
+
 @dataclass
 class Container:
     id: str
@@ -56,7 +59,14 @@ class Container:
     location: str  # 存放区 id 或家电 id
     slot: int = 0
     pose: Pose | None = None
-    microwave_safe: bool = False
+    kind: str = "box"  # box 保鲜盒 / jar 密封罐 / bowl 碗 / cup 杯子 / object 其他常用物品
+    safe_for: list[str] = field(default_factory=list)  # 可以放进哪些加热家电（家电 kind），如 ["microwave"]
+    home: str | None = None  # 原位：用完要放回的存放区
+    home_slot: int | None = None
+
+    @property
+    def microwave_safe(self) -> bool:
+        return "microwave" in self.safe_for
 
 
 @dataclass
@@ -64,7 +74,7 @@ class Item:
     id: str
     name: str
     category: str
-    container: str
+    container: str  # 容器 id；倒进家电（如空气炸锅）后是家电 id
     aliases: list[str] = field(default_factory=list)
     volume_l: float = 0.0  # 占用容器的体积，入库分配容器时用
 
@@ -78,20 +88,25 @@ class Appliance:
     waypoint: str
     door: str | None = None  # 家电门对应的 Fixture id
     capabilities: list[str] = field(default_factory=list)
-    hazards: list[Literal["heat", "blade"]] = field(default_factory=list)
+    hazards: list[Literal["heat", "blade", "hot_water"]] = field(default_factory=list)
     endpoint: str = "mock://"  # 真实接入时换成 Home Assistant / 米家地址
     max_minutes: int = 30  # 危险动作单次最长运行分钟数，超过就拒绝
+    max_temp_c: int | None = None  # 能设温度的家电（空气炸锅、烤箱）允许的最高温度
+    slots: int = 1  # 里面能放几个容器，例如洗碗机的碗位
+    accepts_pour: bool = False  # 能不能把食物直接倒进去（空气炸锅的炸篮）
 
 
 @dataclass
 class StorageArea:
-    """存放区：冷冻室、冷藏室、某层橱柜。"""
+    """存放区：冷冻室、冷藏室、某层橱柜；也可以是餐桌这样的台面（kind="surface"），东西只是临时放在那里。"""
 
     id: str
     name: str
     room: str
     slots: int
     temperature: Literal["ambient", "chilled", "frozen"] = "ambient"
+    kind: Literal["storage", "surface"] = "storage"
+    waypoint: str | None = None  # 没有门的存放区（台面、开放式层架）要写明在哪个点位取放
 
 
 @dataclass
@@ -105,11 +120,22 @@ class Home:
     appliances: dict[str, Appliance]
 
     def find_item(self, text: str) -> Item | None:
-        """按名字或别名在台账里找物品，用于把一句话里的物品对上号。"""
+        """按名字或别名在台账里找物品，用于把一句话里的物品对上号。
+
+        取最长的匹配，避免"鸡米花"被别名"米"认成大米。
+        """
+        best, best_len = None, 0
         for item in self.items.values():
             for name in [item.name, *item.aliases]:
-                if name and name in text:
-                    return item
+                if name and name in text and len(name) > best_len:
+                    best, best_len = item, len(name)
+        return best
+
+    def find_container(self, text: str) -> Container | None:
+        """按名字找容器（碗、杯子这类本身就是要搬的东西）。"""
+        for c in sorted(self.containers.values(), key=lambda c: -len(c.name)):
+            if c.name in text:
+                return c
         return None
 
     def storage_of(self, container_id: str) -> StorageArea | None:
