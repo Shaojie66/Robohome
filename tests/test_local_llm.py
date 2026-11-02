@@ -2,7 +2,8 @@
 
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -23,15 +24,32 @@ SPEC = Path(__file__).resolve().parents[1] / "data" / "kitchen_example.json"
 class StubServer:
     """按顺序返回预设的 content 文本，记录收到的请求体。"""
 
-    def __init__(self, contents, status=200, finish_reason="stop"):
+    def __init__(self, contents, status=200, finish_reason="stop", stall_first=0.0):
         self.contents = list(contents)
         self.requests = []
+        self.stall_first = stall_first  # 第一次请求先卡住这么多秒（模拟 Ollama 挂住）
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 stub.requests.append({"path": self.path, "body": body, "auth": self.headers.get("Authorization")})
+                if stub.stall_first and len(stub.requests) == 1:
+                    time.sleep(stub.stall_first)
+                    return
+                if status == 200 and body.get("stream"):
+                    content = stub.contents.pop(0)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    pieces = [content[i:i + 40] for i in range(0, len(content), 40)] or [""]
+                    for n, piece in enumerate(pieces):
+                        last = n == len(pieces) - 1
+                        chunk = {"choices": [{"delta": {"content": piece},
+                                              "finish_reason": finish_reason if last else None}]}
+                        self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    return
                 if status != 200:
                     payload = {"error": "model not found"}
                 else:
@@ -48,7 +66,7 @@ class StubServer:
             def log_message(self, *args):
                 pass
 
-        self.httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.httpd.server_port}/v1"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -77,6 +95,7 @@ def test_local_planner_over_http(world):
     req = server.requests[0]
     assert req["path"] == "/v1/chat/completions"
     assert req["body"]["model"] == "qwen3:8b"
+    assert req["body"]["stream"] is True
     assert req["body"]["messages"][0]["role"] == "system"
     assert req["body"]["response_format"]["type"] == "json_schema"
     assert req["body"]["response_format"]["json_schema"]["schema"]["required"] == ["feasible", "reason", "steps"]
@@ -130,7 +149,7 @@ def test_local_errors_become_planning_errors(world):
 
 
 def test_connection_refused_message():
-    backend = LocalJSON(base_url="http://127.0.0.1:9/v1", timeout=2)
+    backend = LocalJSON(base_url="http://127.0.0.1:9/v1", idle_timeout=2)
     with pytest.raises(LLMError, match="ollama pull"):
         backend.complete_json("s", [{"role": "user", "content": "x"}], {"type": "object"}, "t")
 
@@ -161,3 +180,28 @@ def test_cli_local_planner(capsys):
         server.close()
     assert code == 0
     assert "完成" in capsys.readouterr().out
+
+
+def test_stalled_stream_is_retried(world):
+    """在 Mac 上遇到过 Ollama 连接挂住不出字；现在等 idle_timeout 秒就重试，不再干等 10 分钟。"""
+    server = StubServer([plan_text(GOOD_PLAN)], stall_first=3)
+    try:
+        backend = LocalJSON(base_url=server.url, idle_timeout=0.5, retries=1)
+        started = time.monotonic()
+        steps = LLMPlanner(backend).plan("把牛肉拿出来解冻", world)
+        elapsed = time.monotonic() - started
+    finally:
+        server.close()
+    assert len(steps) == len(GOOD_PLAN)
+    assert len(server.requests) == 2
+    assert elapsed < 3
+
+
+def test_stall_without_retry_fails_fast(world):
+    server = StubServer([], stall_first=3)
+    try:
+        backend = LocalJSON(base_url=server.url, idle_timeout=0.5, retries=0)
+        with pytest.raises(PlanningError, match="卡住|没有响应"):
+            LLMPlanner(backend).plan("x", world)
+    finally:
+        server.close()
