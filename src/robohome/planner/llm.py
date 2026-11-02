@@ -30,7 +30,7 @@ SYSTEM_PROMPT = """你是一个家庭机器人的任务规划器。家里的一�
 - 机器人只能使用给定的技能，参数只能用世界状态里出现的 id。
 - 物品都装在容器里。取东西就是取它所在的容器；容器在哪个存放区、存放区由哪个部件（门或抽屉）围着、操作这个部件要站在哪个点位，都写在世界状态里。
 - 开门、取放容器之前，机器人必须先移动到对应部件的点位。存放区或家电有门时，取放前门必须开着。
-- 用完的门要关上。启动家电前，家电的门必须关好，机器人手里不能拿着东西。启动加热类动作（如 defrost、heat）必须在 params.minutes 里给出合理的分钟数，例如解冻一盒肉约 8 分钟。
+- 离开一个点位前，必须先关上在这里打开的门（例如取出容器后先关冷冻室门再走）；计划结束时所有打开过的门都要关上。启动家电前，家电的门必须关好，机器人手里不能拿着东西。启动加热类动作（如 defrost、heat）必须在 params.minutes 里给出合理的分钟数，例如解冻一盒肉约 8 分钟。
 - 机器人不进入 forbidden_waypoints，不在家电运行时开它的门或取放东西，不把 microwave_safe 为 false 的容器放进微波炉。
 - 加热、切割等工作交给家电完成，机器人只负责开启和传递。
 
@@ -108,11 +108,10 @@ class LLMPlanner:
             if report.ok:
                 return steps
 
-            failed = report.results[-1]
-            last_error = f"第 {failed.index + 1} 步 {failed.step.describe()}：{failed.message}"
+            last_error = report.summary
             # 只追加，不改写历史：把模型的回复原样放回，再告诉它预演哪里失败
             messages.append(assistant)
             messages.append(
                 self.backend.user_message(f"这个计划在预演中失败了。{last_error}。请修正后给出完整的新计划。")
             )
-        raise PlanningError(f"重试 {self.max_attempts} 次仍未得到可执行的计划，最后一次失败在{last_error}")
+        raise PlanningError(f"重试 {self.max_attempts} 次仍未得到可执行的计划，最后一次失败：{last_error}")

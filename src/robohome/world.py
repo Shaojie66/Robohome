@@ -27,6 +27,8 @@ class World:
     appliances: dict[str, ApplianceAdapter] = field(default_factory=dict)
     # 模拟"台账和现实不一致"：这些容器台账里有，实际去拿时找不到
     missing_containers: set[str] = field(default_factory=set)
+    # 机器人自己打开、还没关上的门；离开前和任务结束时都要关好
+    opened_by_robot: set[str] = field(default_factory=set)
 
     @classmethod
     def from_home(cls, home: Home, start_room: str | None = None, start_waypoint: str | None = None) -> World:
@@ -77,7 +79,12 @@ class World:
                 running=bool(status.get("running")),
                 mode=status.get("mode"),
             )
-        world = World(home=copy.deepcopy(self.home), robot=copy.deepcopy(self.robot), appliances=adapters)
+        world = World(
+            home=copy.deepcopy(self.home),
+            robot=copy.deepcopy(self.robot),
+            appliances=adapters,
+            opened_by_robot=set(self.opened_by_robot),
+        )
         world.sync_appliance_doors()
         return world
 
@@ -87,5 +94,6 @@ class World:
             "robot": f"{self.robot.room}/{self.robot.waypoint}",
             "holding": self.robot.holding,
             "open_fixtures": [f.id for f in self.home.fixtures.values() if f.state == "open"],
+            "opened_by_robot": sorted(self.opened_by_robot),
             "appliances": {k: v.status() for k, v in self.appliances.items()},
         }

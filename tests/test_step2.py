@@ -253,3 +253,36 @@ def test_llm_replans_when_run_time_missing(world):
     steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
     assert steps[-1].args["params"] == {"minutes": 8}
     assert "运行分钟数" in client.calls[1]["messages"][2]["content"]
+
+
+# Mac 上用 qwen3:8b 第二次实测：模型取完牛肉没关冷冻室门就走了
+PLAN_DOOR_LEFT_OPEN = [s for s in GOOD_PLAN if s != {"skill": "close", "args": {"fixture": "freezer_door"}}]
+
+
+def test_leaving_with_door_open_is_blocked(world):
+    report = simulate(world, [Step(**s) for s in PLAN_DOOR_LEFT_OPEN])
+    assert not report.ok
+    assert report.results[-1].stage == "safety"
+    assert "离开 fridge_front 前要先关上冷冻室门" in report.summary
+
+
+def test_plan_must_end_with_doors_closed(world):
+    plan_ = [Step("navigate", {"waypoint": "fridge_front"}), Step("open", {"fixture": "chiller_door"}),
+             Step("pick", {"container": "box_c1"})]
+    report = simulate(world, plan_)
+    assert not report.ok
+    assert "冷藏室门还开着" in report.summary
+
+
+def test_door_opened_by_someone_else_does_not_block(world):
+    world.home.fixtures["chiller_door"].state = "open"  # 主人自己开着的门，不算机器人的
+    report = simulate(world, [Step("navigate", {"waypoint": "fridge_front"}),
+                              Step("navigate", {"waypoint": "counter_front"})])
+    assert report.ok
+
+
+def test_llm_replans_when_door_left_open(world):
+    client = FakeClient(plan(PLAN_DOOR_LEFT_OPEN), plan(GOOD_PLAN))
+    steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
+    assert Step("close", {"fixture": "freezer_door"}) in steps
+    assert "关上冷冻室门" in client.calls[1]["messages"][2]["content"]

@@ -86,6 +86,7 @@ def _check_fixture(world: World, fixture: str, want: str) -> str | None:
 def _run_open(world: World, fixture: str) -> str:
     f = world.home.fixtures[fixture]
     f.state = "open"
+    world.opened_by_robot.add(fixture)
     world.sync_appliance_doors()
     return f"打开{f.name}"
 
@@ -93,6 +94,7 @@ def _run_open(world: World, fixture: str) -> str:
 def _run_close(world: World, fixture: str) -> str:
     f = world.home.fixtures[fixture]
     f.state = "closed"
+    world.opened_by_robot.discard(fixture)
     world.sync_appliance_doors()
     return f"关上{f.name}"
 

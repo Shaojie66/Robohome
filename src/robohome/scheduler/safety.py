@@ -62,9 +62,23 @@ def hands_free_before_hazard(world: World, skill: str, args: dict) -> str | None
     return None
 
 
+def close_doors_before_leaving(world: World, skill: str, args: dict) -> str | None:
+    if skill != "navigate" or args.get("waypoint") == world.robot.waypoint:
+        return None
+    left_open = [
+        world.home.fixtures[f].name
+        for f in sorted(world.opened_by_robot)
+        if world.home.fixtures[f].waypoint == world.robot.waypoint and world.home.fixtures[f].state == "open"
+    ]
+    if left_open:
+        return f"离开 {world.robot.waypoint} 前要先关上{'、'.join(left_open)}"
+    return None
+
+
 DEFAULT_RULES: list[Rule] = [
     no_forbidden_zone,
     no_touching_running_hazard,
     microwave_safe_only,
     hands_free_before_hazard,
+    close_doors_before_leaving,
 ]
