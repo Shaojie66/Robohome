@@ -36,7 +36,7 @@ SYSTEM_PROMPT = """你是一个家庭机器人的任务规划器。家里的一�
 - 启动加热等危险家电时机器人手里不能拿着东西，要先把容器放回它的 home。
 - 启动加热类动作必须在 params.minutes 里给出合理的分钟数（不超过 max_minutes），例如微波炉解冻一盒肉约 8 分钟；能设温度的家电（max_temp_c 不为空）在 params.temp_c 里给温度，其他家电 temp_c 填 null。
 - 机器人不进入 forbidden_waypoints，不在家电运行时开它的门或取放东西，不把 safe_for 里没有这种家电 kind 的容器放进加热家电。
-- 正在运行的家电（running 为 true）不是机器人启动的，主人没明确要求就绝不能停掉它。任务需要用到正在运行或离线（online 为 false）的家电时，把 feasible 设为 false 说明原因。
+- 正在运行的家电（running 为 true）不是机器人启动的，主人没明确要求就绝不能停掉它，也不能再给它下新命令。任务需要用到正在运行或离线（online 为 false）的家电时，把 feasible 设为 false 说明原因。
 - 加热、切割、清洗交给家电完成，机器人只负责开启和传递。appliance 技能走网络接口，不需要站在家电旁边。
 - pour 是把容器里的食物倒进家电，容器本身不进家电，所以倒进空气炸锅不需要看容器的 safe_for。
 - 容器取出后，它原来的槽位就空出来了，之后放回它的 home_slot 总是可以的，即使现在 free_slots 里没有这个槽位。
@@ -112,7 +112,7 @@ class LLMPlanner:
         self.attempts = []
         last_error = ""
         challenged = False
-        for _ in range(self.max_attempts):
+        for attempt in range(self.max_attempts):
             try:
                 data, assistant = self.backend.complete_json(self.system, messages, self.schema, "plan")
             except LLMError as e:
@@ -120,8 +120,8 @@ class LLMPlanner:
             if not data.get("feasible", False):
                 reason = data.get("reason") or "大模型判断这件事做不到"
                 self.attempts.append({"model": [], "plan": [], "error": f"模型判断做不到：{reason}"})
-                if challenged:
-                    raise PlanningError(reason)
+                if challenged or attempt == self.max_attempts - 1:
+                    raise PlanningError(reason)  # 核实过了，或者没有机会再试了：照模型的理由如实回报
                 # Mac 上实测：小模型常凭印象说"做不到"（比如以为罐子要进炸锅、以为槽位满了）。
                 # 让它对照世界状态核实一次；核实后还说做不到，才真的放弃
                 challenged = True

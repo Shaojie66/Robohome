@@ -150,7 +150,7 @@ class Builder:
 def normalize(steps: list[Step], world: World) -> list[Step]:
     """把大模型给的计划补全：补上走动和开关门，修正被占的槽位。
 
-    模型写的 navigate / open / close 会被吸收进来（重复的去掉，缺的补上）；
+    模型写的 navigate / open 会被丢掉，改成真正要用时再走过去、再开门；close 照做；
     认不出来的步骤原样保留，让预演去报错，而不是在这里猜。
     """
     b = Builder(world)
@@ -159,13 +159,9 @@ def normalize(steps: list[Step], world: World) -> list[Step]:
         a = step.args if isinstance(step.args, dict) else {}
         skill = step.skill
         if skill == "navigate" and a.get("waypoint") in home.rooms[world.robot.room].waypoints:
-            b.goto(a["waypoint"])
-        elif skill == "open" and a.get("fixture") in home.fixtures:
-            f = home.fixtures[a["fixture"]]
-            if f.encloses:
-                b.access(f.encloses)
-            else:
-                b.steps.append(step)
+            pass  # 走到哪由后面的取放自己决定，免得先绕一趟
+        elif skill == "open" and a.get("fixture") in home.fixtures and home.fixtures[a["fixture"]].encloses:
+            pass  # 门等真正要用时再开（Mac 实测：模型先开炸篮再去冰箱，炸篮开了又关、回来再开）
         elif skill == "close" and a.get("fixture") in home.fixtures:
             b.close(a["fixture"])
         elif skill == "pick" and a.get("container") in b.where and b.where[a["container"]][0] != "robot":
@@ -202,7 +198,7 @@ def _close_unneeded(b: Builder, rest: list[Step]) -> None:
         elif step.skill == "pour":
             needed.add(a.get("into"))
         elif step.skill in ("open", "close") and a.get("fixture") in b.home.fixtures:
-            needed.add(b.home.fixtures[a["fixture"]].encloses)
+            continue  # 开门会被丢掉、关门本来就要关，都不算"还要用"
         elif step.skill not in ("navigate", "appliance"):
             return  # 认不出来的步骤可能还要用这扇门，保持原样
     for fid in sorted(b.opened):

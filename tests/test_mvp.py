@@ -563,3 +563,55 @@ def test_bad_cook_settings_are_rejected(raw, cook, match):
     next(i for i in raw["items"] if i["name"] == "鸡米花")["cook"] = cook
     with pytest.raises(SpecError, match=match):
         parse_home(raw)
+
+
+# ---------- 第三轮 Mac 实测 ----------
+
+
+AIR_FRY = {"skill": "appliance", "args": {"appliance": "air_fryer", "action": "air_fry", "params": {"minutes": 12, "temp_c": 180}}}
+
+
+def test_running_appliance_gets_no_new_program(world):
+    """Mac 实测：空气炸锅正在运行，模型拿了罐子又放回去，然后又对它下了一次 air_fry，还报告完成。"""
+    apply_fault(world, "busy:air_fryer")
+    model = [{"skill": "pick", "args": {"container": "jar_f1"}},
+             {"skill": "place", "args": {"container": "jar_f1", "location": "freezer", "slot": 3}}, AIR_FRY]
+    steps = normalize([Step(**x) for x in model], world)
+    report = simulate(world, steps, instruction=TASKS[2].instruction)
+    assert not report.ok and "不能再给它下新命令" in report.summary
+    # 就算绕过安全规则，家电接口本身也会拒绝
+    report = execute(world, [{"skill": "navigate", "args": {"waypoint": "counter_front"}}, AIR_FRY], rules=[])
+    assert not report.ok and "正在运行" in report.summary
+
+
+def test_robot_can_restart_after_stopping_its_own_run(world):
+    report = execute(world, [{"skill": "navigate", "args": {"waypoint": "counter_front"}}, AIR_FRY,
+                             {"skill": "appliance", "args": {"appliance": "air_fryer", "action": "stop", "params": {"minutes": None, "temp_c": None}}},
+                             AIR_FRY])
+    assert report.ok, report.render()
+
+
+def test_refusal_on_last_attempt_reports_the_reason(world):
+    bad = [{"skill": "pick", "args": {"container": "nope"}}]
+    client = FakeClient(plan(bad), plan(bad), plan([], feasible=False, reason="洗碗机正在运行"))
+    with pytest.raises(PlanningError, match="^洗碗机正在运行$"):
+        LLMPlanner(client=client).plan("把洗好的碗从洗碗机收到柜子", world)
+    assert len(client.calls) == 3
+
+
+def test_model_open_and_navigate_are_done_when_needed(world):
+    """Mac 实测：模型先走到灶台开炸篮，再去冰箱拿罐子，补全后炸篮开了又关、回来再开。"""
+    model = [{"skill": "navigate", "args": {"waypoint": "counter_front"}},
+             {"skill": "open", "args": {"fixture": "air_fryer_basket"}},
+             {"skill": "pick", "args": {"container": "jar_f1"}},
+             {"skill": "pour", "args": {"container": "jar_f1", "into": "air_fryer"}},
+             {"skill": "place", "args": {"container": "jar_f1", "location": "freezer", "slot": 3}}, AIR_FRY]
+    steps = normalize([Step(**x) for x in model], world)
+    opens = [s.args["fixture"] for s in steps if s.skill == "open"]
+    assert opens.count("air_fryer_basket") == 1
+    assert steps[0] == Step("navigate", {"waypoint": "fridge_front"})
+    s = Scheduler(world, FixedPlan(steps))
+    s.submit(TASKS[2].instruction)
+    [report] = s.run_pending()
+    assert report.ok, report.render()
+    assert TASKS[2].check(world, report) == []

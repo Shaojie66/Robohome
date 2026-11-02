@@ -75,11 +75,17 @@ STOP_WORDS = ("停", "关掉", "关闭", "关了", "暂停")
 
 
 def no_interrupting_appliances(world: World, skill: str, args: dict) -> str | None:
-    if skill != "appliance" or args.get("action") not in ("stop", "off"):
+    """家电正在跑主人的程序时，机器人不去碰它：不停它，也不给它下新程序。
+
+    Mac 上 qwen3:8b 实测：洗碗机还在洗就被停掉；空气炸锅正在运行，又被重新下了一次 air_fry。
+    """
+    if skill != "appliance":
         return None
     a = world.home.appliances.get(args.get("appliance", ""))
     if a is None or a.id in world.started_by_robot or not world.appliance_running(a.id):
         return None
+    if args.get("action") not in ("stop", "off"):
+        return f"{a.name}正在运行，不是机器人启动的，不能再给它下新命令，会打断主人的程序"
     if a.name in world.instruction and any(w in world.instruction for w in STOP_WORDS):
         return None  # 主人明确让停
     return f"{a.name}正在运行，不是机器人启动的，主人没有要求就不能停"

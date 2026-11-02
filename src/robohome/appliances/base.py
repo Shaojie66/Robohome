@@ -52,6 +52,8 @@ class MockAppliance:
         else:
             if not self.door_closed:
                 raise ApplianceError(f"{self.appliance_id} 门没关，拒绝启动")
+            if self.running:
+                raise ApplianceError(f"{self.appliance_id} 正在运行 {self.mode}，先停下才能换程序")
             self.running, self.mode = True, action
         self.log.append(f"{action} {params}".strip())
         if action not in ("stop", "off"):
