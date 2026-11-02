@@ -39,6 +39,7 @@ class MockAppliance:
     running: bool = False
     mode: str | None = None
     log: list[str] = field(default_factory=list)
+    last_params: dict = field(default_factory=dict)  # 最近一次启动时的参数，测试里核对时间和温度
 
     def call(self, action: str, params: dict | None = None) -> dict:
         params = params or {}
@@ -51,8 +52,12 @@ class MockAppliance:
         else:
             if not self.door_closed:
                 raise ApplianceError(f"{self.appliance_id} 门没关，拒绝启动")
+            if self.running:
+                raise ApplianceError(f"{self.appliance_id} 正在运行 {self.mode}，先停下才能换程序")
             self.running, self.mode = True, action
         self.log.append(f"{action} {params}".strip())
+        if action not in ("stop", "off"):
+            self.last_params = dict(params)
         return self.status()
 
     def status(self) -> dict:

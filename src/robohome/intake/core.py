@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ..spec.models import Item
+from ..spec.models import FOOD_KINDS, Item
 from ..world import World
 
 Temperature = Literal["ambient", "chilled", "frozen"]
@@ -88,13 +88,22 @@ def _new_item_id(world: World) -> str:
     return f"item_{n:03d}"
 
 
+def _food_containers(world: World, temperature: str) -> list:
+    """这个温区里能装食物的容器：只算保鲜盒和密封罐，碗杯不算；放在餐桌这类台面上的也不算。"""
+    home = world.home
+    return [
+        c for c in home.containers.values()
+        if c.kind in FOOD_KINDS
+        and c.location in home.storage
+        and home.storage[c.location].kind == "storage"
+        and home.storage[c.location].temperature == temperature
+    ]
+
+
 def choose_container(world: World, item: NewItem) -> tuple[str | None, str]:
     """为一件物品挑容器，返回 (容器 id, 说明)。找不到时容器 id 为 None。"""
     home = world.home
-    candidates = [
-        c for c in home.containers.values()
-        if c.location in home.storage and home.storage[c.location].temperature == item.temperature
-    ]
+    candidates = _food_containers(world, item.temperature)
     if not candidates:
         return None, f"家里没有{TEMP_NAMES[item.temperature]}的存放区"
 
@@ -140,10 +149,8 @@ def _split(world: World, item: NewItem) -> tuple[list[tuple[str, float]], float]
 
     while remaining > 1e-9:
         candidates = [
-            c.id for c in home.containers.values()
-            if c.location in home.storage
-            and home.storage[c.location].temperature == item.temperature
-            and _categories(world, c.id) <= {item.category}  # 空的或同类的，不混装
+            c.id for c in _food_containers(world, item.temperature)
+            if _categories(world, c.id) <= {item.category}  # 空的或同类的，不混装
             and room_left(c.id) > 1e-9
         ]
         if not candidates:

@@ -82,8 +82,9 @@ def test_llm_plan_first_try(world):
 
 
 def test_llm_replans_after_failed_simulation(world):
+    # 关掉自动补全，直接测重规划：模型忘了开门，预演失败后把原因告诉它
     client = FakeClient(plan(BAD_PLAN), plan(GOOD_PLAN))
-    steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
+    steps = LLMPlanner(client=client, normalize_plans=False).plan("把牛肉拿出来解冻", world)
     assert len(steps) == len(GOOD_PLAN)
     second = client.calls[1]["messages"]
     assert [m["role"] for m in second] == ["user", "assistant", "user"]
@@ -91,15 +92,41 @@ def test_llm_replans_after_failed_simulation(world):
 
 
 def test_llm_infeasible_raises_with_reason(world):
-    client = FakeClient(plan([], feasible=False, reason="台账里没有榴莲"))
+    # 第一次说做不到会被要求核实一次，核实后还是做不到才放弃
+    client = FakeClient(plan([], feasible=False, reason="台账里没有榴莲"), plan([], feasible=False, reason="台账里没有榴莲"))
     with pytest.raises(PlanningError, match="榴莲"):
         LLMPlanner(client=client).plan("把榴莲拿出来", world)
+    assert len(client.calls) == 2
+    assert "核实" in str(client.calls[1]["messages"][-1]["content"])
+
+
+def test_llm_wrong_refusal_is_challenged_once(world):
+    good = [
+        {"skill": "pick", "args": {"container": "box_f1"}},
+        {"skill": "place", "args": {"container": "box_f1", "location": "microwave", "slot": 0}},
+        {"skill": "appliance", "args": {"appliance": "microwave", "action": "defrost", "params": {"minutes": 8, "temp_c": None}}},
+    ]
+    client = FakeClient(plan([], feasible=False, reason="微波炉不能放盒子"), plan(good))
+    planner = LLMPlanner(client=client)
+    steps = planner.plan("把牛肉拿出来解冻", world)
+    assert any(s.skill == "appliance" and s.args["appliance"] == "microwave" for s in steps)
+    assert len(client.calls) == 2
+    assert "做不到" in planner.attempts[0]["error"]
 
 
 def test_llm_gives_up_after_max_attempts(world):
-    client = FakeClient(plan(BAD_PLAN), plan(BAD_PLAN))
+    other = [{"skill": "navigate", "args": {"waypoint": "fridge_front"}}, {"skill": "pick", "args": {"container": "box_f2"}}]
+    client = FakeClient(plan(BAD_PLAN), plan(other))
     with pytest.raises(PlanningError, match="重试 2 次"):
-        LLMPlanner(client=client, max_attempts=2).plan("把牛肉拿出来解冻", world)
+        LLMPlanner(client=client, max_attempts=2, normalize_plans=False).plan("把牛肉拿出来解冻", world)
+
+
+def test_llm_stops_when_it_repeats_the_same_plan(world):
+    """同一个计划预演只会同样失败，模型交回同一个计划就不再浪费时间。"""
+    client = FakeClient(plan(BAD_PLAN), plan(BAD_PLAN), plan(BAD_PLAN))
+    with pytest.raises(PlanningError, match="冷冻室门没开（模型改不出别的计划）"):
+        LLMPlanner(client=client, normalize_plans=False).plan("把牛肉拿出来解冻", world)
+    assert len(client.calls) == 2
 
 
 def test_llm_refusal_and_truncation(world):
@@ -256,7 +283,7 @@ def test_llm_replans_when_run_time_missing(world):
                         "args": {"appliance": "microwave", "action": "defrost", "params": {"minutes": None}}}
     client = FakeClient(plan(plan_no_time), plan(GOOD_PLAN))
     steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
-    assert steps[-1].args["params"] == {"minutes": 8}
+    assert steps[-1].args["params"] == {"minutes": 8, "temp_c": None}
     assert "运行分钟数" in client.calls[1]["messages"][2]["content"]
 
 
@@ -288,6 +315,14 @@ def test_door_opened_by_someone_else_does_not_block(world):
 
 def test_llm_replans_when_door_left_open(world):
     client = FakeClient(plan(PLAN_DOOR_LEFT_OPEN), plan(GOOD_PLAN))
-    steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
+    steps = LLMPlanner(client=client, normalize_plans=False).plan("把牛肉拿出来解冻", world)
     assert Step("close", {"fixture": "freezer_door"}) in steps
     assert "关上冷冻室门" in client.calls[1]["messages"][2]["content"]
+
+
+def test_door_left_open_is_fixed_without_replanning(world):
+    """第 3 周 Mac 实测后加的自动补全：忘了关门不用再麻烦模型重想一遍。"""
+    client = FakeClient(plan(PLAN_DOOR_LEFT_OPEN))
+    steps = LLMPlanner(client=client).plan("把牛肉拿出来解冻", world)
+    assert len(client.calls) == 1
+    assert steps.index(Step("close", {"fixture": "freezer_door"})) < steps.index(Step("navigate", {"waypoint": "counter_front"}))
