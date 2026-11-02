@@ -593,7 +593,8 @@ def test_robot_can_restart_after_stopping_its_own_run(world):
 
 def test_refusal_on_last_attempt_reports_the_reason(world):
     bad = [{"skill": "pick", "args": {"container": "nope"}}]
-    client = FakeClient(plan(bad), plan(bad), plan([], feasible=False, reason="洗碗机正在运行"))
+    worse = [{"skill": "pick", "args": {"container": "nope_2"}}]
+    client = FakeClient(plan(bad), plan(worse), plan([], feasible=False, reason="洗碗机正在运行"))
     with pytest.raises(PlanningError, match="^洗碗机正在运行$"):
         LLMPlanner(client=client).plan("把洗好的碗从洗碗机收到柜子", world)
     assert len(client.calls) == 3

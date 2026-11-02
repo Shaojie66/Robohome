@@ -112,6 +112,7 @@ class LLMPlanner:
         self.attempts = []
         last_error = ""
         challenged = False
+        tried: set[tuple[str, ...]] = set()
         for attempt in range(self.max_attempts):
             try:
                 data, assistant = self.backend.complete_json(self.system, messages, self.schema, "plan")
@@ -150,6 +151,11 @@ class LLMPlanner:
                 return full
 
             last_error = report.summary
+            key = tuple(s.describe() for s in full)
+            if key in tried:
+                # Mac 实测：空气炸锅正在运行时，模型连着几轮交回同一个计划。预演是确定的，同一个计划只会同样失败
+                raise PlanningError(f"{last_error}（模型改不出别的计划）")
+            tried.add(key)
             listing = "\n".join(f"{i + 1}. {s.describe()}" for i, s in enumerate(full))
             # 只追加，不改写历史：把模型的回复原样放回，再告诉它预演哪里失败
             messages.append(assistant)

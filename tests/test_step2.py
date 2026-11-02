@@ -115,9 +115,18 @@ def test_llm_wrong_refusal_is_challenged_once(world):
 
 
 def test_llm_gives_up_after_max_attempts(world):
-    client = FakeClient(plan(BAD_PLAN), plan(BAD_PLAN))
+    other = [{"skill": "navigate", "args": {"waypoint": "fridge_front"}}, {"skill": "pick", "args": {"container": "box_f2"}}]
+    client = FakeClient(plan(BAD_PLAN), plan(other))
     with pytest.raises(PlanningError, match="重试 2 次"):
         LLMPlanner(client=client, max_attempts=2, normalize_plans=False).plan("把牛肉拿出来解冻", world)
+
+
+def test_llm_stops_when_it_repeats_the_same_plan(world):
+    """同一个计划预演只会同样失败，模型交回同一个计划就不再浪费时间。"""
+    client = FakeClient(plan(BAD_PLAN), plan(BAD_PLAN), plan(BAD_PLAN))
+    with pytest.raises(PlanningError, match="冷冻室门没开（模型改不出别的计划）"):
+        LLMPlanner(client=client, normalize_plans=False).plan("把牛肉拿出来解冻", world)
+    assert len(client.calls) == 2
 
 
 def test_llm_refusal_and_truncation(world):
