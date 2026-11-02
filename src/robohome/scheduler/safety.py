@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import re
+
 from typing import Callable
 
 from ..world import World
@@ -72,6 +74,20 @@ def hands_free_before_hazard(world: World, skill: str, args: dict) -> str | None
 
 
 STOP_WORDS = ("停", "关掉", "关闭", "关了", "暂停")
+NEGATIONS = ("不要", "不用", "别", "不准", "不许", "先不")
+CLAUSE_BREAK = re.compile(r"[，,。；;！!？?\n]|然后|接着|之后|再")
+
+
+def owner_asked_to_stop(instruction: str, appliance_name: str) -> bool:
+    """主人是不是明确让停这台家电：家电名和"停/关掉"要在同一个分句里，而且没有"别/不要"。
+
+    "关闭微波炉，然后看看洗碗机里有什么"只授权停微波炉，不授权停洗碗机。
+    """
+    for clause in CLAUSE_BREAK.split(instruction):
+        if appliance_name in clause and any(w in clause for w in STOP_WORDS):
+            if not any(n in clause for n in NEGATIONS):
+                return True
+    return False
 
 
 def no_interrupting_appliances(world: World, skill: str, args: dict) -> str | None:
@@ -86,7 +102,7 @@ def no_interrupting_appliances(world: World, skill: str, args: dict) -> str | No
         return None
     if args.get("action") not in ("stop", "off"):
         return f"{a.name}正在运行，不是机器人启动的，不能再给它下新命令，会打断主人的程序"
-    if a.name in world.instruction and any(w in world.instruction for w in STOP_WORDS):
+    if owner_asked_to_stop(world.instruction, a.name):
         return None  # 主人明确让停
     return f"{a.name}正在运行，不是机器人启动的，主人没有要求就不能停"
 

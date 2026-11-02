@@ -155,11 +155,13 @@ def normalize(steps: list[Step], world: World) -> list[Step]:
     """
     b = Builder(world)
     home = world.home
+    walk_to = None  # 模型最后要去的点位；后面还有取放就由取放决定去哪
     for i, step in enumerate(steps):
         a = step.args if isinstance(step.args, dict) else {}
         skill = step.skill
         if skill == "navigate" and a.get("waypoint") in home.rooms[world.robot.room].waypoints:
-            pass  # 走到哪由后面的取放自己决定，免得先绕一趟
+            walk_to = a["waypoint"]  # 先记下，免得先绕一趟；计划最后真要去那里才走
+            continue
         elif skill == "open" and a.get("fixture") in home.fixtures and home.fixtures[a["fixture"]].encloses:
             pass  # 门等真正要用时再开（Mac 实测：模型先开炸篮再去冰箱，炸篮开了又关、回来再开）
         elif skill == "close" and a.get("fixture") in home.fixtures:
@@ -178,8 +180,13 @@ def normalize(steps: list[Step], world: World) -> list[Step]:
             b.call(a["appliance"], a.get("action", ""), a.get("params") if isinstance(a.get("params"), dict) else None)
         else:
             b.steps.append(step)
+        if skill not in ("open", "close"):
+            walk_to = None
         _close_unneeded(b, steps[i + 1:])
-    return b.finish()
+    b.finish()
+    if walk_to:
+        b.goto(walk_to)  # 例如"去门口"：计划里只有走动，或者做完事要回到某处
+    return b.steps
 
 
 def _close_unneeded(b: Builder, rest: list[Step]) -> None:

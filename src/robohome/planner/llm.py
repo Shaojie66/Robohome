@@ -141,6 +141,13 @@ class LLMPlanner:
             if not steps:
                 raise PlanningError("大模型返回了空计划")
             full = normalize(steps, world) if self.normalize else steps
+            if not full:
+                # 例如模型只写了 open(freezer_door)：开门会被丢掉，补全后什么都不剩，不能当成完成
+                last_error = "补全后计划是空的：只写走动和开门不算做事，要写出取、放、拍照、倒、启动家电这些实际动作"
+                self.attempts.append({"model": [s.describe() for s in steps], "plan": [], "error": last_error})
+                messages.append(assistant)
+                messages.append(self.backend.user_message(f"{last_error}。请给出完整的新计划。"))
+                continue
             report = simulate(world, full, instruction=instruction)
             self.attempts.append({
                 "model": [s.describe() for s in steps],
