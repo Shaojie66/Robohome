@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import re
-
 from typing import Callable
 
 from ..world import World
@@ -83,11 +82,10 @@ def owner_asked_to_stop(instruction: str, appliance_name: str) -> bool:
 
     "关闭微波炉，然后看看洗碗机里有什么"只授权停微波炉，不授权停洗碗机。
     """
-    for clause in CLAUSE_BREAK.split(instruction):
-        if appliance_name in clause and any(w in clause for w in STOP_WORDS):
-            if not any(n in clause for n in NEGATIONS):
-                return True
-    return False
+    return any(
+        appliance_name in clause and any(w in clause for w in STOP_WORDS) and not any(n in clause for n in NEGATIONS)
+        for clause in CLAUSE_BREAK.split(instruction)
+    )
 
 
 def no_interrupting_appliances(world: World, skill: str, args: dict) -> str | None:
