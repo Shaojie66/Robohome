@@ -59,6 +59,8 @@ class World:
     unknown_objects: dict[str, list[str]] = field(default_factory=dict)
     photos: list[Photo] = field(default_factory=list)  # 这次任务拍的照片
     notices: list[str] = field(default_factory=list)  # 执行中发现、需要告诉主人的事
+    started_by_robot: set[str] = field(default_factory=set)  # 机器人自己启动、还在运行的家电
+    instruction: str = ""  # 正在执行的主人指令，安全规则用它判断主人有没有明确要求某件事
 
     @classmethod
     def from_home(cls, home: Home, start_room: str | None = None, start_waypoint: str | None = None) -> World:
@@ -175,6 +177,8 @@ class World:
             robot=copy.deepcopy(self.robot),
             appliances=adapters,
             opened_by_robot=set(self.opened_by_robot),
+            started_by_robot=set(self.started_by_robot),
+            instruction=self.instruction,
         )
         world.sync_appliance_doors()
         return world

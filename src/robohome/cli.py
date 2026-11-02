@@ -83,7 +83,15 @@ def _mvp(args) -> int:
     def show(run) -> None:
         tag = f"［故障 {run.fault}，应{'停下' if run.expect == 'stop' else '提醒'}］" if run.fault else ""
         mark = "通过" if run.passed else "未通过：" + "；".join(run.problems)
-        print(f"\n{tag}{run.report.render()}\n→ {mark}（{run.seconds:.1f} 秒）")
+        lines = [f"\n{tag}{run.report.render()}"]
+        if args.show_plans or not run.passed:
+            for n, a in enumerate(run.attempts, 1):
+                lines.append(f"  规划第 {n} 轮：模型给了 {len(a['model'])} 步，补全后 {len(a['plan'])} 步，"
+                             + ("预演通过" if a["error"] is None else f"预演失败：{a['error']}"))
+                if args.show_plans:
+                    lines += [f"    模型：{s}" for s in a["model"]]
+        lines.append(f"→ {mark}（{run.seconds:.1f} 秒）")
+        print("\n".join(lines), flush=True)  # 本地模型一次要几十秒，及时打印，免得看起来像卡住
 
     runs = run_mvp(planner, args.spec, args.task or None, faults=args.faults, repeat=args.repeat, on_run=show)
     print(summarize(runs))
@@ -158,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--faults", action="store_true", help="每个任务注入几种故障，检查是否安全停下")
     m.add_argument("--repeat", type=int, default=1, help="每个任务重复几次（不注入故障时）")
     m.add_argument("--planner", choices=["rule", "local", "claude"], default="rule")
+    m.add_argument("--show-plans", action="store_true", help="打印大模型每一轮给的计划")
     m.add_argument("--model")
     m.add_argument("--base-url")
 

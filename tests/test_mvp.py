@@ -20,7 +20,8 @@ from robohome.mvp import (
     run_mvp,
     run_task,
 )
-from robohome.planner import LLMPlanner, RulePlanner, Step
+from robohome.planner import LLMPlanner, PlanningError, RulePlanner, Step
+from robohome.planner.builder import normalize
 from robohome.planner.context import describe_world
 from robohome.planner.llm import plan_schema
 from robohome.scheduler import Scheduler, simulate
@@ -121,6 +122,25 @@ def test_checker_flags_task_that_should_have_stopped():
 def test_checker_flags_missing_notice():
     run = run_task(TASKS[0], RulePlanner(), SPEC, fault=None, expect="notice")
     assert "台账和现场对不上，却没有提醒主人" in run.problems
+
+
+class BrokenPlanner:
+    attempts = [{"model": [], "plan": [], "error": "第 3 步前置条件不满足"}]
+
+    def plan(self, instruction, world):
+        raise PlanningError("重试 3 次仍未得到可执行的计划")
+
+
+def test_checker_rejects_planning_failure_for_hidden_fault():
+    """Mac 实测：计划本身就错了，碰巧也算"停下"。看不见的故障必须在执行时被发现才算通过。"""
+    run = run_task(TASKS[3], BrokenPlanner(), SPEC, fault="stuck:dish_cabinet_door", expect="stop")
+    assert any("规划阶段就停了" in p for p in run.problems)
+    assert run.attempts == BrokenPlanner.attempts
+
+
+def test_planning_refusal_is_fine_for_visible_fault():
+    run = run_task(TASKS[3], BrokenPlanner(), SPEC, fault="busy:dishwasher", expect="stop")
+    assert run.passed  # 洗碗机在运行，规划时就看得见，拒绝执行是对的
 
 
 @pytest.mark.parametrize("fault,match", [
@@ -333,16 +353,108 @@ def test_catalog_has_new_skills():
 # ---------- 大模型规划器碰到新规则 ----------
 
 
-def test_llm_replans_when_it_starts_fryer_while_holding_jar(world):
-    good = [{"skill": s.skill, "args": s.args} for s in RulePlanner().plan("把鸡米花放进空气炸锅并启动", world)]
-    # 坏计划：倒完直接启动，罐子还在手里
-    pour_at = next(i for i, s in enumerate(good) if s["skill"] == "pour")
-    bad = good[: pour_at + 2] + [good[-1]]
-    client = FakeClient(plan(bad), plan(good))
-    steps = LLMPlanner(client=client).plan("把鸡米花放进空气炸锅并启动", world)
-    assert len(steps) == len(good)
-    feedback = client.calls[1]["messages"][-1]["content"]
-    assert "手里拿着" in feedback
+def test_fryer_plan_without_jar_return_is_completed(world):
+    """Mac 上 qwen3:8b 实测：倒完直接启动，罐子还在手里。补全后先把罐子放回原位再启动。"""
+    model_steps = [
+        {"skill": "pick", "args": {"container": "jar_f1"}},
+        {"skill": "pour", "args": {"container": "jar_f1", "into": "air_fryer"}},
+        {"skill": "appliance", "args": {"appliance": "air_fryer", "action": "air_fry", "params": {"minutes": 12, "temp_c": 180}}},
+    ]
+    client = FakeClient(plan(model_steps))
+    planner = LLMPlanner(client=client)
+    steps = planner.plan("把鸡米花放进空气炸锅并启动", world)
+    assert len(client.calls) == 1
+    s = Scheduler(world, FixedPlan(steps))
+    s.submit("把鸡米花放进空气炸锅并启动")
+    [report] = s.run_pending()
+    assert report.ok, report.render()
+    assert TASKS[2].check(world, report) == []
+    assert planner.attempts[0]["model"][0] == 'pick(container="jar_f1")'
+
+
+def test_model_plan_with_only_essential_steps(world):
+    """模型只写实质动作，走动和开关门全部由系统补上。"""
+    model_steps = [
+        {"skill": "inspect", "args": {"location": "dining_table"}},
+        {"skill": "pick", "args": {"container": "cup_1"}},
+        {"skill": "place", "args": {"container": "cup_1", "location": "dish_cabinet", "slot": 3}},
+        {"skill": "pick", "args": {"container": "jar_salt"}},
+        {"skill": "place", "args": {"container": "jar_salt", "location": "upper_cabinet", "slot": 0}},  # 槽位被占
+    ]
+    steps = LLMPlanner(client=FakeClient(plan(model_steps))).plan("把桌上散落的常用物品收回原位", world)
+    s = Scheduler(world, FixedPlan(steps))
+    s.submit("把桌上散落的常用物品收回原位")
+    [report] = s.run_pending()
+    assert report.ok, report.render()
+    assert world.home.containers["jar_salt"].location == "upper_cabinet"
+    assert world.home.containers["jar_salt"].slot != 0
+
+
+def test_surface_is_photographed_before_first_pick(world):
+    model_steps = [{"skill": "pick", "args": {"container": "cup_1"}},
+                   {"skill": "place", "args": {"container": "cup_1", "location": "dish_cabinet", "slot": 3}}]
+    steps = normalize([Step(**x) for x in model_steps], world)
+    skills = [s.skill for s in steps]
+    assert skills.index("inspect") < skills.index("pick")
+
+
+def test_unknown_steps_are_left_for_preview_to_reject(world):
+    steps = normalize([Step("open", {"fixture": "air_fry,er_basket"})], world)
+    assert steps == [Step("open", {"fixture": "air_fry,er_basket"})]
+    report = simulate(world, steps)
+    assert "部件 air_fry,er_basket 不存在" in report.summary
+
+
+def test_robot_does_not_stop_appliance_it_did_not_start(world):
+    """Mac 上 qwen3:8b 实测：洗碗机还在洗，模型直接把它停了再收碗。"""
+    apply_fault(world, "busy:dishwasher")
+    report = Scheduler(world, RulePlanner()).execute("把洗好的碗从洗碗机收到柜子", [
+        Step("appliance", {"appliance": "dishwasher", "action": "stop", "params": {"minutes": None, "temp_c": None}}),
+    ])
+    assert report.results[-1].stage == "safety"
+    assert "不是机器人启动的" in report.summary
+    assert world.appliance_running("dishwasher")
+
+
+def test_owner_can_ask_to_stop(world):
+    apply_fault(world, "busy:dishwasher")
+    report = Scheduler(world, RulePlanner()).execute("把洗碗机停了", [
+        Step("appliance", {"appliance": "dishwasher", "action": "stop", "params": {"minutes": None, "temp_c": None}}),
+    ])
+    assert report.ok
+    assert not world.appliance_running("dishwasher")
+
+
+def test_robot_can_stop_what_it_started(world):
+    s = Scheduler(world, RulePlanner())
+    s.submit("把牛肉拿出来解冻")
+    s.run_pending()
+    report = s.execute("算了别解冻了", [
+        Step("appliance", {"appliance": "microwave", "action": "stop", "params": {"minutes": None, "temp_c": None}}),
+    ])
+    assert report.ok
+
+
+def test_preview_knows_the_instruction(world):
+    apply_fault(world, "busy:dishwasher")
+    stop = [Step("appliance", {"appliance": "dishwasher", "action": "stop", "params": {"minutes": None, "temp_c": None}})]
+    assert not simulate(world, stop).ok
+    assert simulate(world, stop, instruction="洗碗机先暂停一下").ok
+
+
+def test_default_home_is_initial_place():
+    home = load_home(SPEC)
+    assert (home.containers["box_f1"].home, home.containers["box_f1"].home_slot) == ("freezer", 0)
+    assert home.containers["cup_1"].home == "dish_cabinet"  # 写了原位的照写的来
+    assert home.containers["bowl_1"].home == "dish_cabinet"
+
+
+class FixedPlan:
+    def __init__(self, steps):
+        self.steps = steps
+
+    def plan(self, instruction, world):
+        return self.steps
 
 
 # ---------- 命令行 ----------

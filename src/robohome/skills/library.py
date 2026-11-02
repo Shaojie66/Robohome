@@ -253,6 +253,10 @@ def _run_appliance(world: World, appliance: str, action: str, params: dict | Non
     except ApplianceError as e:
         # 让调度器当作失败处理
         raise SkillFailed(str(e)) from e
+    if action in STOP_ACTIONS:
+        world.started_by_robot.discard(appliance)
+    else:
+        world.started_by_robot.add(appliance)
     name = world.home.appliances[appliance].name
     return f"调用{name} {action} {params if params else ''}".rstrip() + f" → running={status.get('running')}"
 

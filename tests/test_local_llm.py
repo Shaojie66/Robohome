@@ -120,7 +120,7 @@ def test_local_planner_over_http(world):
 def test_local_planner_replans_with_text_history(world):
     server = StubServer([plan_text(BAD_PLAN), plan_text(GOOD_PLAN, think=True)])
     try:
-        steps = LLMPlanner(LocalJSON(base_url=server.url)).plan("把牛肉拿出来解冻", world)
+        steps = LLMPlanner(LocalJSON(base_url=server.url), normalize_plans=False).plan("把牛肉拿出来解冻", world)
     finally:
         server.close()
     assert len(steps) == len(GOOD_PLAN)

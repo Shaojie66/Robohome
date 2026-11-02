@@ -27,6 +27,10 @@ def _pose(d: dict | None) -> Pose | None:
     return Pose(position=tuple(d["position"]), yaw_deg=d.get("yaw_deg", 0.0))
 
 
+def _raw(data: dict, container_id: str) -> dict:
+    return next((c for c in data.get("containers", []) if c.get("id") == container_id), {})
+
+
 def _by_id(objs: list) -> dict:
     out = {}
     for o in objs:
@@ -83,6 +87,11 @@ def parse_home(data: dict) -> Home:
             for c in data.get("containers", [])
         ]
     )
+    # 没写原位的容器，建家时放在哪个存放区，原位就是哪里（台面和家电里的不算）
+    for c in containers.values():
+        area = storage.get(c.location)
+        if c.home is None and area is not None and area.kind == "storage" and "home" not in _raw(data, c.id):
+            c.home, c.home_slot = c.location, c.slot
     items = _by_id([Item(**i) for i in data.get("items", [])])
     appliances = _by_id([Appliance(**a) for a in data.get("appliances", [])])
 

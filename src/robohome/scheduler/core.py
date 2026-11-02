@@ -60,10 +60,10 @@ class Report:
         return "\n".join(lines)
 
 
-def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None) -> Report:
+def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None, instruction: str = "") -> Report:
     """在世界的副本上预演计划，不改动真实世界。规划层用它在执行前发现问题。"""
     sandbox = Scheduler(world.sandbox(), planner=None, rules=rules, cleanup=False)  # type: ignore[arg-type]
-    return sandbox.execute("预演", plan)
+    return sandbox.execute(instruction or "预演", plan)
 
 
 class Scheduler:
@@ -96,6 +96,7 @@ class Scheduler:
 
     def execute(self, instruction: str, plan: list[Step]) -> Report:
         report = Report(instruction, ok=True)
+        self.world.instruction = instruction
         photos_before, notices_before = len(self.world.photos), len(self.world.notices)
         for i, step in enumerate(plan):
             result = self._run_step(i, step)

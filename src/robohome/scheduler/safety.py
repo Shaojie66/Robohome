@@ -5,6 +5,7 @@
 - 机器人不直接接触热源和刀具：家电运行时不开它的门、不从里面取放东西
 - 放进加热家电（微波炉、空气炸锅……）的容器必须标明能进这种家电
 - 手里拿着东西时不调用带危险的家电，避免边拿边启动
+- 不擅自停掉别人启动、正在运行的家电（例如洗碗机没洗完），主人明确要求的除外
 
 规则和技能分开写，这样换仿真或真机时规则一行不用改。
 """
@@ -70,6 +71,20 @@ def hands_free_before_hazard(world: World, skill: str, args: dict) -> str | None
     return None
 
 
+STOP_WORDS = ("停", "关掉", "关闭", "关了", "暂停")
+
+
+def no_interrupting_appliances(world: World, skill: str, args: dict) -> str | None:
+    if skill != "appliance" or args.get("action") not in ("stop", "off"):
+        return None
+    a = world.home.appliances.get(args.get("appliance", ""))
+    if a is None or a.id in world.started_by_robot or not world.appliance_running(a.id):
+        return None
+    if a.name in world.instruction and any(w in world.instruction for w in STOP_WORDS):
+        return None  # 主人明确让停
+    return f"{a.name}正在运行，不是机器人启动的，主人没有要求就不能停"
+
+
 def close_doors_before_leaving(world: World, skill: str, args: dict) -> str | None:
     if skill != "navigate" or args.get("waypoint") == world.robot.waypoint:
         return None
@@ -88,5 +103,6 @@ DEFAULT_RULES: list[Rule] = [
     no_touching_running_hazard,
     heat_safe_containers_only,
     hands_free_before_hazard,
+    no_interrupting_appliances,
     close_doors_before_leaving,
 ]

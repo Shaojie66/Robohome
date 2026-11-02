@@ -19,111 +19,12 @@ import re
 
 from ..world import World
 from .base import PlanningError, Step
+from .builder import Builder
 
 LOOK_WORDS = ("看看", "查看", "看一下", "看一眼", "有什么", "拍")
 TIDY_WORDS = ("归位", "原位", "收回", "收拾", "收好")
 DEFAULT_FRY = {"minutes": 12, "temp_c": 180}
 DEFAULT_DEFROST_MINUTES = 8
-
-
-class _Builder:
-    """边写计划边记住机器人会在哪、开着哪些门、东西放在哪。
-
-    保证三件事：离开一个点位前关上在这里打开的门；放东西只放空槽位；计划结束时打开过的门都关好。
-    """
-
-    def __init__(self, world: World):
-        self.home = world.home
-        self.waypoint = world.robot.waypoint
-        self.holding = world.robot.holding
-        self.door_open = {f.id: f.state == "open" for f in world.home.fixtures.values()}
-        self.opened = set(world.opened_by_robot)  # 机器人自己开的门，最后要关
-        self.where = {c.id: (c.location, c.slot) for c in world.home.containers.values()}
-        self.steps: list[Step] = []
-
-    # ---- 位置 ----
-
-    def _waypoint_of(self, location: str) -> str | None:
-        fixture = self.home.fixture_enclosing(location)
-        if fixture:
-            return fixture.waypoint
-        if location in self.home.storage:
-            return self.home.storage[location].waypoint
-        if location in self.home.appliances:
-            return self.home.appliances[location].waypoint
-        return None
-
-    def goto(self, waypoint: str | None) -> None:
-        if waypoint is None or waypoint == self.waypoint:
-            return
-        for fid in sorted(self.opened):
-            if self.home.fixtures[fid].waypoint == self.waypoint:
-                self._close(fid)
-        self.steps.append(Step("navigate", {"waypoint": waypoint}))
-        self.waypoint = waypoint
-
-    def access(self, location: str) -> None:
-        """走到存放区或家电跟前，有门就打开。"""
-        fixture = self.home.fixture_enclosing(location)
-        self.goto(self._waypoint_of(location))
-        if fixture and not self.door_open[fixture.id]:
-            self.steps.append(Step("open", {"fixture": fixture.id}))
-            self.door_open[fixture.id] = True
-            self.opened.add(fixture.id)
-
-    def _close(self, fid: str) -> None:
-        self.goto(self.home.fixtures[fid].waypoint)
-        self.steps.append(Step("close", {"fixture": fid}))
-        self.door_open[fid] = False
-        self.opened.discard(fid)
-
-    def close_area(self, location: str) -> None:
-        fixture = self.home.fixture_enclosing(location)
-        if fixture and fixture.id in self.opened:
-            self._close(fixture.id)
-
-    def finish(self) -> list[Step]:
-        here = [f for f in sorted(self.opened) if self.home.fixtures[f].waypoint == self.waypoint]
-        for fid in here + [f for f in sorted(self.opened) if f not in here]:
-            self._close(fid)
-        return self.steps
-
-    # ---- 动作 ----
-
-    def free_slot(self, location: str, prefer: int | None = None) -> int | None:
-        if location in self.home.storage:
-            n = self.home.storage[location].slots
-        else:
-            n = self.home.appliances[location].slots
-        taken = {slot for cid, (loc, slot) in self.where.items() if loc == location and cid != self.holding}
-        if prefer is not None and 0 <= prefer < n and prefer not in taken:
-            return prefer
-        return next((i for i in range(n) if i not in taken), None)
-
-    def pick(self, container: str) -> None:
-        location, _ = self.where[container]
-        self.access(location)
-        self.steps.append(Step("pick", {"container": container}))
-        self.where[container] = ("robot", 0)
-        self.holding = container
-
-    def place(self, container: str, location: str, slot: int) -> None:
-        self.access(location)
-        self.steps.append(Step("place", {"container": container, "location": location, "slot": slot}))
-        self.where[container] = (location, slot)
-        self.holding = None
-
-    def inspect(self, location: str) -> None:
-        self.access(location)
-        self.steps.append(Step("inspect", {"location": location}))
-
-    def pour(self, container: str, into: str) -> None:
-        self.access(into)
-        self.steps.append(Step("pour", {"container": container, "into": into}))
-
-    def call(self, appliance: str, action: str, minutes: int | None = None, temp_c: int | None = None) -> None:
-        params = {"minutes": minutes, "temp_c": temp_c}
-        self.steps.append(Step("appliance", {"appliance": appliance, "action": action, "params": params}))
 
 
 class RulePlanner:
@@ -156,7 +57,7 @@ class RulePlanner:
         return item.container
 
     @staticmethod
-    def _home_of(world: World, b: _Builder, container: str) -> tuple[str, int]:
+    def _home_of(world: World, b: Builder, container: str) -> tuple[str, int]:
         c = world.home.containers[container]
         if c.home is None:
             raise PlanningError(f"{c.name}没有登记原位，不知道该放回哪里")
@@ -178,7 +79,7 @@ class RulePlanner:
             ] + [a.id for a in home.appliances.values() if a.name in instruction]
         if not targets:
             raise PlanningError("不知道要看哪里")
-        b = _Builder(world)
+        b = Builder(world)
         for location in targets:
             b.inspect(location)
             b.close_area(location)
@@ -191,7 +92,7 @@ class RulePlanner:
         chiller = next((s for s in world.home.storage.values() if s.temperature == "chilled"), None)
         if chiller is None:
             raise PlanningError("家里没有冷藏区")
-        b = _Builder(world)
+        b = Builder(world)
         source, _ = b.where[container]
         b.pick(container)
         b.close_area(source)
@@ -207,13 +108,13 @@ class RulePlanner:
         if microwave is None:
             raise PlanningError("家里没有能解冻的家电")
         container = self._item_container(instruction, world)
-        b = _Builder(world)
+        b = Builder(world)
         source, _ = b.where[container]
         b.pick(container)
         b.close_area(source)
         b.place(container, microwave.id, 0)
         b.close_area(microwave.id)
-        b.call(microwave.id, "defrost", minutes=DEFAULT_DEFROST_MINUTES)
+        b.call(microwave.id, "defrost", {"minutes": DEFAULT_DEFROST_MINUTES})
         return b.finish()
 
     # ---- 3. 空气炸锅 ----
@@ -225,7 +126,7 @@ class RulePlanner:
         container = self._item_container(instruction, world)
         minutes = _number(instruction, r"(\d+)\s*分钟") or DEFAULT_FRY["minutes"]
         temp = _number(instruction, r"(\d+)\s*度") or DEFAULT_FRY["temp_c"]
-        b = _Builder(world)
+        b = Builder(world)
         source, slot = b.where[container]
         b.pick(container)
         b.close_area(source)
@@ -233,7 +134,7 @@ class RulePlanner:
         b.close_area(fryer.id)  # 推回炸篮
         b.place(container, source, slot)  # 罐子放回原处，空着手才能启动
         b.close_area(source)
-        b.call(fryer.id, "air_fry", minutes=minutes, temp_c=temp)
+        b.call(fryer.id, "air_fry", {"minutes": minutes, "temp_c": temp})
         return b.finish()
 
     # ---- 4. 洗碗机收碗 ----
@@ -248,7 +149,7 @@ class RulePlanner:
         )
         if not dishes:
             raise PlanningError(f"{dishwasher.name}里没有东西")
-        b = _Builder(world)
+        b = Builder(world)
         for c in dishes:
             b.pick(c.id)
             location, slot = self._home_of(world, b, c.id)
@@ -263,9 +164,9 @@ class RulePlanner:
         surfaces = named or surfaces
         if not surfaces:
             raise PlanningError("家里没有登记桌面")
-        b = _Builder(world)
+        b = Builder(world)
         for surface in surfaces:
-            b.inspect(surface.id)  # 先拍照识别桌上有什么
+            b.inspect(surface.id)  # 先拍照识别桌上有什么，桌上没有能归位的东西也要拍
             items = sorted(
                 (c for c in world.home.containers.values() if c.location == surface.id and c.home is not None),
                 key=lambda c: c.slot,
@@ -280,7 +181,7 @@ class RulePlanner:
 
     def _fetch(self, instruction: str, world: World) -> list[Step]:
         container = self._item_container(instruction, world)
-        b = _Builder(world)
+        b = Builder(world)
         source, _ = b.where[container]
         b.pick(container)
         b.close_area(source)

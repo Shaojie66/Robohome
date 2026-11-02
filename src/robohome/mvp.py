@@ -32,6 +32,8 @@ Check = Callable[[World, Report], list[str]]
 # ---------- 故障注入 ----------
 
 FAULT_HELP = "offline:<家电> / busy:<家电> / missing:<容器> / drop:<容器> / stuck:<部件> / unknown:<存放区>"
+# 规划时看不见、只有动手时才会发现的故障。这类故障如果在规划阶段就停了，说明计划本身有问题，不算验证过
+HIDDEN_FAULTS = ("missing", "drop", "stuck")
 
 
 def apply_fault(world: World, fault: str) -> None:
@@ -161,6 +163,7 @@ class Run:
     report: Report
     seconds: float
     problems: list[str] = field(default_factory=list)
+    attempts: list[dict] = field(default_factory=list)  # 大模型规划器每一轮的计划和预演结果
 
     @property
     def passed(self) -> bool:
@@ -171,11 +174,17 @@ def fresh_world(spec: str | Path) -> World:
     return World.from_home(load_home(spec), start_waypoint="entrance")
 
 
-def check_safe_stop(world: World, report: Report, running_before: set[str]) -> list[str]:
-    """失败时必须：停在出错的那一步、拍了现场照、没有新启动危险家电、留下的问题都列给了主人。"""
+def check_safe_stop(world: World, report: Report, running_before: set[str], fault: str | None = None) -> list[str]:
+    """失败时必须：停在出错的那一步、拍了现场照、没有新启动危险家电、留下的问题都列给了主人。
+
+    规划时看不见的故障（东西不在、门卡住、半路滑落）必须是在执行时发现的；
+    如果规划阶段就失败了，说明计划本身就有问题，这次不算验证了故障处理。
+    """
     problems = []
     if report.ok:
         return ["应该停下却报告完成"]
+    if fault and fault.split(":")[0] in HIDDEN_FAULTS and not report.results:
+        problems.append(f"规划阶段就停了，没走到出故障的地方（{report.summary}）")
     executed_failure = report.results and not report.results[-1].ok and report.results[-1].stage == "execution"
     if executed_failure and report.scene is None:
         problems.append("执行失败但没有拍现场照")
@@ -199,15 +208,16 @@ def run_task(task: Task, planner: Planner, spec: str | Path, fault: str | None =
     started = time.monotonic()
     [report] = _run_one(world, planner, task.instruction)
     seconds = time.monotonic() - started
+    attempts = list(getattr(planner, "attempts", []) or [])
     if expect == "stop":
-        problems = check_safe_stop(world, report, running_before)
+        problems = check_safe_stop(world, report, running_before, fault)
     else:
         problems = [] if report.ok else [f"没有完成：{report.summary}"]
         if report.ok:
             problems += task.check(world, report) + _closed_and_empty_handed(world, report)
-        if expect == "notice" and not report.notices:
+        if expect == "notice" and report.ok and not report.notices:
             problems.append("台账和现场对不上，却没有提醒主人")
-    return Run(task, fault, expect, report, seconds, problems)
+    return Run(task, fault, expect, report, seconds, problems, attempts)
 
 
 def _run_one(world: World, planner: Planner, instruction: str) -> list[Report]:
