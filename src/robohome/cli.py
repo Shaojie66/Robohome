@@ -4,6 +4,9 @@
     robohome run "把牛肉拿出来解冻"
     robohome run "把牛肉拿出来解冻" --fault offline:microwave
     robohome run "把牛肉拿出来解冻" --fault missing:box_f1
+    robohome run "把牛肉拿出来解冻" --planner claude      # 用 Claude 规划（需要 ANTHROPIC_API_KEY）
+    robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"
+    robohome intake "..." --recognizer claude --image receipt.jpg --save data/my_home.json
     robohome skills
 """
 
@@ -15,9 +18,13 @@ import sys
 from pathlib import Path
 
 from .appliances.base import MockAppliance
+from .intake.core import assign
+from .intake.recognize import KeywordRecognizer, LLMRecognizer
+from .planner.base import Planner
 from .planner.rules import RulePlanner
 from .scheduler.core import Scheduler
 from .skills.library import catalog
+from .spec.dump import save_home
 from .spec.loader import SpecError, load_home
 from .world import World
 
@@ -39,6 +46,19 @@ def _apply_fault(world: World, fault: str) -> None:
         raise SystemExit(f"不认识的故障类型：{fault}（可用 offline:<家电> / missing:<容器>）")
 
 
+def _make_planner(name: str, model: str) -> Planner:
+    if name == "claude":
+        from .planner.llm import LLMPlanner
+
+        return LLMPlanner(model=model)
+    return RulePlanner()
+
+
+def _start_world(home) -> World:
+    first_room = next(iter(home.rooms.values()))
+    return World.from_home(home, start_waypoint="entrance" if "entrance" in first_room.waypoints else None)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="robohome", description="家庭专属机器人管家（模拟运行）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -51,6 +71,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--spec", default=str(DEFAULT_SPEC))
     r.add_argument("--fault", action="append", default=[], help="注入故障：offline:<家电> 或 missing:<容器>")
     r.add_argument("--json", action="store_true", help="输出 JSON 结果")
+    r.add_argument("--planner", choices=["rule", "claude"], default="rule", help="规划器：规则（离线）或 Claude")
+    r.add_argument("--model", default="claude-opus-5-5")
+
+    i = sub.add_parser("intake", help="入库：识别新买的物品并分配容器")
+    i.add_argument("text", nargs="?", default="")
+    i.add_argument("--spec", default=str(DEFAULT_SPEC))
+    i.add_argument("--recognizer", choices=["keyword", "claude"], default="keyword")
+    i.add_argument("--image", help="小票或购物袋照片（需要 --recognizer claude）")
+    i.add_argument("--model", default="claude-opus-5-5")
+    i.add_argument("--save", help="把更新后的台账写到这个文件")
 
     sub.add_parser("skills", help="列出技能清单")
 
@@ -71,10 +101,28 @@ def main(argv: list[str] | None = None) -> int:
               f"{len(home.containers)} 个容器，{len(home.items)} 件物品，{len(home.appliances)} 台家电")
         return 0
 
-    world = World.from_home(home, start_waypoint="entrance" if "entrance" in next(iter(home.rooms.values())).waypoints else None)
+    world = _start_world(home)
+
+    if args.cmd == "intake":
+        if args.recognizer == "claude":
+            categories = sorted({it.category for it in home.items.values()})
+            items, unknown = LLMRecognizer(model=args.model).recognize(args.text, args.image, categories)
+        else:
+            if args.image:
+                print("识别照片需要 --recognizer claude", file=sys.stderr)
+                return 2
+            items, unknown = KeywordRecognizer().recognize(args.text)
+        result = assign(world, items)
+        result.unrecognized = unknown
+        print(result.render(world))
+        if args.save:
+            save_home(world.home, args.save)
+            print(f"台账已写入 {args.save}")
+        return 0 if result.ok else 1
+
     for f in args.fault:
         _apply_fault(world, f)
-    scheduler = Scheduler(world, RulePlanner())
+    scheduler = Scheduler(world, _make_planner(args.planner, args.model))
     for ins in args.instructions:
         scheduler.submit(ins)
     reports = scheduler.run_pending()

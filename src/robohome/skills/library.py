@@ -1,7 +1,7 @@
 """技能库：机器人能做的每个动作都是一个函数。
 
 每个技能有三部分：
-- params   参数说明，后面直接交给大模型当作工具定义
+- params   参数的 JSON Schema，规划层直接拿去约束大模型的输出
 - check    前置条件：在当前世界状态下能不能做，不能做就返回原因
 - run      执行：第一阶段只改世界状态（模拟实现）；仿真和真机阶段在这里驱动执行器
 
@@ -23,7 +23,7 @@ HELD = "robot"  # 容器被拿在手里时的位置
 class Skill:
     name: str
     description: str
-    params: dict[str, str]
+    params: dict[str, dict]  # 参数名 → JSON Schema
     check: Callable[..., str | None]
     run: Callable[..., str]
 
@@ -162,17 +162,22 @@ def _check_appliance(world: World, appliance: str, action: str, params: dict | N
 
 
 def _run_appliance(world: World, appliance: str, action: str, params: dict | None = None) -> str:
+    params = {k: v for k, v in (params or {}).items() if v is not None}
     try:
-        status = world.appliances[appliance].call(action, params or {})
+        status = world.appliances[appliance].call(action, params)
     except ApplianceError as e:
         # 让调度器当作失败处理
         raise SkillFailed(str(e)) from e
     name = world.home.appliances[appliance].name
-    return f"调用{name} {action} {params or ''}".rstrip() + f" → running={status.get('running')}"
+    return f"调用{name} {action} {params if params else ''}".rstrip() + f" → running={status.get('running')}"
 
 
 class SkillFailed(RuntimeError):
     """执行中途失败（家电拒绝、抓取失手等）。"""
+
+
+def _s(type_, description: str) -> dict:
+    return {"type": type_, "description": description}
 
 
 SKILLS: dict[str, Skill] = {
@@ -181,42 +186,56 @@ SKILLS: dict[str, Skill] = {
         Skill(
             "navigate",
             "移动到当前房间里的一个点位",
-            {"waypoint": "点位 id"},
+            {"waypoint": _s("string", "点位 id")},
             _check_navigate,
             _run_navigate,
         ),
         Skill(
             "open",
             "打开柜门、抽屉或家电门（只握把手）",
-            {"fixture": "部件 id"},
+            {"fixture": _s("string", "部件 id")},
             lambda w, fixture: _check_fixture(w, fixture, "open"),
             _run_open,
         ),
         Skill(
             "close",
             "关上柜门、抽屉或家电门",
-            {"fixture": "部件 id"},
+            {"fixture": _s("string", "部件 id")},
             lambda w, fixture: _check_fixture(w, fixture, "closed"),
             _run_close,
         ),
         Skill(
             "pick",
             "从存放区或家电里取出一个标准容器",
-            {"container": "容器 id"},
+            {"container": _s("string", "容器 id")},
             _check_pick,
             _run_pick,
         ),
         Skill(
             "place",
             "把手里的容器放进存放区某个槽位，或放进家电",
-            {"container": "容器 id", "location": "存放区或家电 id", "slot": "槽位序号，默认 0"},
+            {
+                "container": _s("string", "容器 id"),
+                "location": _s("string", "存放区或家电 id"),
+                "slot": _s("integer", "槽位序号；放进家电时填 0"),
+            },
             _check_place,
             _run_place,
         ),
         Skill(
             "appliance",
             "调用联网家电的接口，例如微波炉解冻",
-            {"appliance": "家电 id", "action": "动作，如 defrost", "params": "参数，如 {\"minutes\": 8}"},
+            {
+                "appliance": _s("string", "家电 id"),
+                "action": _s("string", "家电支持的动作，如 defrost"),
+                "params": {
+                    "type": "object",
+                    "description": "动作参数",
+                    "properties": {"minutes": _s(["integer", "null"], "运行分钟数，不需要时填 null")},
+                    "required": ["minutes"],
+                    "additionalProperties": False,
+                },
+            },
             _check_appliance,
             _run_appliance,
         ),
@@ -225,5 +244,17 @@ SKILLS: dict[str, Skill] = {
 
 
 def catalog() -> list[dict]:
-    """技能清单，后面交给大模型规划层当作可调用的工具。"""
-    return [{"name": s.name, "description": s.description, "params": s.params} for s in SKILLS.values()]
+    """技能清单：名字、说明、参数 Schema。规划层用它约束大模型只能输出合法的技能调用。"""
+    return [
+        {
+            "name": s.name,
+            "description": s.description,
+            "input_schema": {
+                "type": "object",
+                "properties": s.params,
+                "required": list(s.params),
+                "additionalProperties": False,
+            },
+        }
+        for s in SKILLS.values()
+    ]

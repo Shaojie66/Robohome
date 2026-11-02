@@ -41,6 +41,11 @@ class Report:
         return "\n".join(lines)
 
 
+def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None) -> Report:
+    """在世界的副本上预演计划，不改动真实世界。规划层用它在执行前发现问题。"""
+    return Scheduler(world.sandbox(), planner=None, rules=rules).execute("预演", plan)  # type: ignore[arg-type]
+
+
 class Scheduler:
     def __init__(self, world: World, planner: Planner, rules: list[Rule] | None = None):
         self.world = world

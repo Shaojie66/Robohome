@@ -59,6 +59,28 @@ class World:
                 return c.id
         return None
 
+    def sandbox(self) -> World:
+        """复制一份用来预演计划的世界：家和机器人状态照搬，家电换成同状态的模拟家电。
+
+        预演只知道台账里写的东西，所以不带 missing_containers；家电默认在线。
+        """
+        adapters: dict[str, ApplianceAdapter] = {}
+        for a in self.home.appliances.values():
+            status = {}
+            try:
+                status = self.appliances[a.id].status()
+            except Exception:
+                pass
+            adapters[a.id] = MockAppliance(
+                appliance_id=a.id,
+                capabilities=list(a.capabilities),
+                running=bool(status.get("running")),
+                mode=status.get("mode"),
+            )
+        world = World(home=copy.deepcopy(self.home), robot=copy.deepcopy(self.robot), appliances=adapters)
+        world.sync_appliance_doors()
+        return world
+
     def snapshot(self) -> dict:
         """给日志和回报用的简要状态。"""
         return {
