@@ -15,10 +15,9 @@ from typing import Callable
 
 from ..appliances.base import ApplianceError
 from ..intake.core import TEMP_NAMES, NewItem, record_item, used_volume
-from ..spec.models import FOOD_KINDS, PARCEL
+from ..spec.models import FOOD_KINDS, HELD, PARCEL
 from ..world import FLOOR, World
 
-HELD = "robot"  # 容器被拿在手里时的位置
 
 
 @dataclass(frozen=True)

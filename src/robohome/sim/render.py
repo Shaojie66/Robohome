@@ -58,10 +58,17 @@ class Recorder:
     """每隔一段仿真时间截一帧俯视全景，最后存成 GIF；拍照动作另存机器人视角的 PNG。"""
 
     def __init__(
-        self, out_dir: str | Path, fps: int = 10, size: tuple[int, int] = (720, 440), speed: float = 2.0, prefix: str = ""
+        self,
+        out_dir: str | Path,
+        fps: int = 10,
+        size: tuple[int, int] = (720, 440),
+        speed: float = 2.0,
+        prefix: str = "",
+        video: bool = True,
     ):
         self.out_dir = Path(out_dir)
         self.prefix = prefix  # 照片文件名前缀，同一个目录录好几次时不互相覆盖
+        self.video = video  # False 时只拍照片，不录 GIF 的帧（家庭服务器默认这样，省时间）
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.size = size
         self.every = max(1, round(speed / fps / 0.002))  # 每隔多少步截一帧；speed 倍速播放
@@ -103,7 +110,7 @@ class Recorder:
         return _camera(lookat, (lookat[0] - 0.25, cy - 3.1, 3.9))
 
     def tick(self, body) -> None:
-        if body.frame_count % self.every:
+        if not self.video or body.frame_count % self.every:
             return
         img = self._render(body, self.overview(body))
         if img is not None:
@@ -111,6 +118,8 @@ class Recorder:
 
     def hold(self, body, seconds: float) -> None:
         """把当前画面停留一会儿。"""
+        if not self.video:
+            return
         img = self._render(body, self.overview(body))
         if img is not None:
             self.frames += [self._caption(img, body.caption)] * max(1, round(seconds * self.fps))

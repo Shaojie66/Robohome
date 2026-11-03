@@ -19,6 +19,8 @@
     robohome intake "..." --run --recognizer local --sim --record out/  # 本地模型认标签，在仿真里做并录像
     robohome intake "..." --spec my_home.json --save my_home.json --yes  # 确认后写入台账
     robohome intake --recognizer local --model qwen2.5vl:7b --image receipt.jpg
+    robohome serve                                       # 在家里的电脑上开服务，手机浏览器连上来下指令、看回报
+    robohome serve --sim --planner local --data-dir ~/robohome-home  # 仿真里做（回报带照片），本地模型规划
     robohome skills
 """
 
@@ -57,27 +59,6 @@ def _make_planner(name: str, model: str | None, base_url: str | None) -> Planner
 def _start_world(home) -> World:
     first_room = next(iter(home.rooms.values()))
     return World.from_home(home, start_waypoint="entrance" if "entrance" in first_room.waypoints else None)
-
-
-def _step_json(s) -> dict:
-    return {"step": s.step.describe(), "ok": s.ok, "stage": s.stage, "message": s.message}
-
-
-def _photo_json(p) -> dict:
-    return {"location": p.location, "title": p.title, "seen": p.seen, "notes": p.notes, "image": p.image}
-
-
-def _report_json(r) -> dict:
-    return {
-        "instruction": r.instruction, "ok": r.ok, "summary": r.summary,
-        "steps": [_step_json(s) for s in r.results],
-        "photos": [_photo_json(p) for p in r.photos],
-        "scene": _photo_json(r.scene) if r.scene else None,
-        "notices": r.notices,
-        "cleanup": [_step_json(s) for s in r.cleanup],
-        "needs_attention": r.needs_attention,
-        "final_state": r.final_state,
-    }
 
 
 def _mvp(args) -> int:
@@ -279,6 +260,42 @@ def _intake_run(args, home, world: World) -> int:
     return 0 if report.ok and not report.notices else 1
 
 
+def _serve(args) -> int:
+    from .server import Service, serve
+
+    if args.sim or args.video:
+        from . import sim
+
+        if not sim.available():
+            print(sim.INSTALL_HINT, file=sys.stderr)
+            return 2
+    try:
+        planner = _make_planner(args.planner, args.model, args.base_url)
+        kind = args.recognizer or {"rule": "keyword"}.get(args.planner, args.planner)
+        if kind == "keyword":
+            recognizer = KeywordRecognizer()
+        else:
+            from .llm import make_backend
+
+            recognizer = LLMRecognizer(make_backend(kind, args.model, args.base_url, effort="low"))
+    except LLMError as e:
+        print(e, file=sys.stderr)
+        return 2
+    examples = [t.instruction for t in TASKS if not t.parcels] + [t.instruction for t in TASKS if t.parcels][:1]
+    try:
+        service = Service(args.data_dir, args.spec, planner, recognizer, sim=args.sim or args.video, video=args.video,
+                          examples=examples, planner_name=args.planner)
+    except SpecError as e:
+        print(e, file=sys.stderr)
+        return 2
+    try:
+        serve(service, args.host, args.port)
+    except OSError as e:
+        print(f"开不了服务：{e}（端口 {args.port} 被占用了？换一个 --port 试试）", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="robohome", description="家庭专属机器人管家（模拟运行）")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -328,6 +345,20 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("spec", nargs="?", default=str(DEFAULT_SPEC))
     c.add_argument("--image", help="顺便渲染一张厨房全景图（需要 MuJoCo）")
 
+    sv = sub.add_parser("serve", help="在家里的电脑上开服务，手机用浏览器连上来下指令、看回报（只在家里 Wi-Fi 里能用）")
+    sv.add_argument("--data-dir", default=str(Path.home() / ".robohome"),
+                    help="台账、任务、照片存在这里，重启后接着用（默认 ~/.robohome）")
+    sv.add_argument("--spec", default=str(DEFAULT_SPEC), help="第一次启动时用的家用规范文件；之后以数据目录里的台账为准")
+    sv.add_argument("--host", default="0.0.0.0", help="监听地址；只想本机用就写 127.0.0.1")
+    sv.add_argument("--port", type=int, default=8765)
+    sv.add_argument("--planner", choices=["rule", "local", "claude"], default="rule")
+    sv.add_argument("--recognizer", choices=["keyword", "local", "claude"],
+                    help="入库时认标签用什么；默认跟规划器走（rule 用关键词表）")
+    sv.add_argument("--model")
+    sv.add_argument("--base-url")
+    sv.add_argument("--sim", action="store_true", help="在 MuJoCo 物理仿真里做，回报带机器人拍的照片")
+    sv.add_argument("--video", action="store_true", help="每个任务再录一段 GIF（会自动打开 --sim，慢一些）")
+
     sub.add_parser("skills", help="列出技能清单")
 
     args = p.parse_args(argv)
@@ -339,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
         return _mvp(args)
     if args.cmd == "sim-check":
         return _sim_check(args)
+    if args.cmd == "serve":
+        return _serve(args)
 
     try:
         home = load_home(args.spec)
@@ -388,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"录像：{gif}" if gif else "这台机器上渲染不可用，只跑了物理，没有录像", file=sys.stderr)
 
     if args.json:
-        print(json.dumps([_report_json(r) for r in reports], ensure_ascii=False, indent=2))
+        print(json.dumps([r.to_dict() for r in reports], ensure_ascii=False, indent=2))
     else:
         print("\n\n".join(r.render() for r in reports))
     return 0 if all(r.ok for r in reports) else 1

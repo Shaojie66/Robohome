@@ -60,6 +60,7 @@ class Decision:
     container: str | None = None
     note: str = ""  # 留在台上的原因，或者挑这个容器的理由
     ask: str = "请主人看一下"  # 留在台上时，请主人做什么
+    named_by_owner: bool = False  # label 是主人告诉的（标签看不清或认不出时，在手机上回答的）
 
     def describe(self) -> str:
         if not self.label:
@@ -72,8 +73,10 @@ class Decision:
 
 
 class IntakePlanner:
-    def __init__(self, recognizer: LabelRecognizer):
+    def __init__(self, recognizer: LabelRecognizer, names: dict[str, str] | None = None):
+        """names 是主人告诉的说法（包装 id → 是什么），标签看不清或认不出的包装按主人的说法认。"""
         self.recognizer = recognizer
+        self.names = {k: v.strip() for k, v in (names or {}).items() if v and v.strip()}
         self.decisions: list[Decision] = []  # 最近一次规划每件包装的处理，方便调试和回报
 
     def plan(self, instruction: str, world: World) -> list[Step]:
@@ -81,7 +84,7 @@ class IntakePlanner:
         parcels = parcels_on_counter(world)
         if not parcels:
             raise PlanningError("入库台上没有要入库的东西")
-        labels = [p.label.strip() or None for p in parcels]
+        labels = [self.names.get(p.id) or p.label.strip() or None for p in parcels]
         categories = sorted({i.category for i in home.items.values()})
         try:
             items = self.recognizer.recognize_labels(labels, instruction, categories)
@@ -94,7 +97,7 @@ class IntakePlanner:
         sandbox = world.sandbox()
         self.decisions = []
         for p, label, item in zip(parcels, labels, items):
-            d = Decision(p.id, label or "")
+            d = Decision(p.id, label or "", named_by_owner=p.id in self.names)
             self.decisions.append(d)
             if label is None:
                 d.note = "的标签看不清，认不出是什么"
