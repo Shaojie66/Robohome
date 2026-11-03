@@ -212,7 +212,8 @@ TASKS: list[Task] = [
         ("stuck:dish_cabinet_door", "stop"),
         ("unknown:dining_table", "notice"),
     )),
-    # 第二阶段第 1 周：入库闭环。苹果、鸡蛋、牛奶放冷藏或常温都合理
+    # 第二阶段第 1 周：入库闭环。苹果、鸡蛋、牛奶放冷藏或常温都合理。
+    # 卡住的门选一定会用到的那扇（虾仁一定进冷冻、酸奶一定进冷藏），否则模型把鸡蛋放常温时故障根本碰不到
     _intake_task(
         "intake1", "今天买了一斤五花肉、两盒酸奶和一袋苹果",
         (("一斤五花肉", ("frozen",)), ("两盒酸奶", ("chilled",)), ("一袋苹果", ("chilled", "ambient"))),
@@ -221,13 +222,13 @@ TASKS: list[Task] = [
     _intake_task(
         "intake2", "买了虾仁、一盒鸡蛋、挂面和一袋饺子",
         (("虾仁", ("frozen",)), ("一盒鸡蛋", ("chilled", "ambient")), ("挂面", ("ambient",)), ("一袋饺子", ("frozen",))),
-        (("unreadable:parcel_4", "notice"), ("stuck:chiller_door", "stop"), ("missing:parcel_3", "stop")),
+        (("unreadable:parcel_4", "notice"), ("stuck:freezer_door", "stop"), ("missing:parcel_3", "stop")),
     ),
     _intake_task(
         "intake3", "刚从超市回来，买了鸡翅、牛奶、西兰花、酸奶和面粉",
         (("鸡翅", ("frozen",)), ("牛奶", ("chilled", "ambient")), ("西兰花", ("chilled",)), ("酸奶", ("chilled",)),
          ("面粉", ("ambient",))),
-        (("unreadable:parcel_1", "notice"), ("drop:parcel_2", "stop"), ("stuck:cabinet_door", "stop")),
+        (("unreadable:parcel_1", "notice"), ("drop:parcel_2", "stop"), ("stuck:chiller_door", "stop")),
     ),
 ]
 
