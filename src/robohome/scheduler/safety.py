@@ -6,6 +6,7 @@
 - 放进加热家电（微波炉、空气炸锅……）的容器必须标明能进这种家电
 - 手里拿着东西时不调用带危险的家电，避免边拿边启动
 - 不擅自停掉别人启动、正在运行的家电（例如洗碗机没洗完），主人明确要求的除外
+- 入库时食物只进对的温区（冷冻的不进冷藏室），一个容器只装一类东西（生肉不和饺子混放）
 
 规则和技能分开写，这样换仿真或真机时规则一行不用改。
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
+from ..intake.core import TEMP_NAMES, categories_in
 from ..world import World
 
 Rule = Callable[[World, str, dict], str | None]
@@ -118,6 +120,23 @@ def close_doors_before_leaving(world: World, skill: str, args: dict) -> str | No
     return None
 
 
+def food_storage(world: World, skill: str, args: dict) -> str | None:
+    """装盒时：温区要对，不混装。分配容器时已经按这两条挑了，这里在动手前再兜一次底。"""
+    if skill != "stow":
+        return None
+    c = world.home.containers.get(args.get("container", ""))
+    area = world.home.storage.get(c.location) if c else None
+    if area is None:
+        return None  # 容器不对由技能前置条件报
+    name, want = args.get("name") or "这件东西", args.get("temperature")
+    if want in TEMP_NAMES and area.temperature != want:
+        return f"{name}要{TEMP_NAMES[want]}，{area.name}是{TEMP_NAMES[area.temperature]}的，温区不对"
+    others = categories_in(world, c.id) - {args.get("category")}
+    if others:
+        return f"{c.name}里装的是{'、'.join(sorted(others))}，不能再装{args.get('category')}，不混放"
+    return None
+
+
 DEFAULT_RULES: list[Rule] = [
     no_forbidden_zone,
     no_touching_running_hazard,
@@ -125,4 +144,5 @@ DEFAULT_RULES: list[Rule] = [
     hands_free_before_hazard,
     no_interrupting_appliances,
     close_doors_before_leaving,
+    food_storage,
 ]

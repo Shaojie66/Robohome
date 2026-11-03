@@ -60,6 +60,7 @@ def describe_world(world: World) -> dict:
                 "home_slot": c.home_slot,
                 "safe_for": c.safe_for,
                 "contents": contents.get(c.id, []),
+                **({"label": c.label} if c.kind == "parcel" else {}),  # 待入库包装上的标签
             }
             for c in home.containers.values()
         ],

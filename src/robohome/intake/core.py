@@ -12,15 +12,17 @@
 - 都不行就开一个空容器，挑放得下的最小那个
 - 还是放不下就如实报告，不硬塞
 
-这一步只更新台账。把东西实际放进容器的动作会在技能库里加一个 stow 技能，交给调度器执行。
+assign 只更新台账（预览用）。让机器人真的做一遍见 planner/intake.py：
+主人把买回来的东西摆在入库台上，机器人逐件扫描标签、识别、按上面的规则挑容器，
+拿起包装走到容器跟前装进去（技能 stow），台账在装好的那一刻才记上。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from ..spec.models import FOOD_KINDS, Item
+from ..spec.models import FOOD_KINDS, PARCEL, Container, Item
 from ..world import World
 
 Temperature = Literal["ambient", "chilled", "frozen"]
@@ -73,11 +75,11 @@ class IntakeResult:
         return "\n".join(lines)
 
 
-def _used_volume(world: World, container_id: str) -> float:
+def used_volume(world: World, container_id: str) -> float:
     return sum(i.volume_l for i in world.home.items.values() if i.container == container_id)
 
 
-def _categories(world: World, container_id: str) -> set[str]:
+def categories_in(world: World, container_id: str) -> set[str]:
     return {i.category for i in world.home.items.values() if i.container == container_id}
 
 
@@ -108,14 +110,14 @@ def choose_container(world: World, item: NewItem) -> tuple[str | None, str]:
         return None, f"家里没有{TEMP_NAMES[item.temperature]}的存放区"
 
     def remaining(cid: str) -> float:
-        return home.containers[cid].capacity_l - _used_volume(world, cid)
+        return home.containers[cid].capacity_l - used_volume(world, cid)
 
-    same = [c for c in candidates if _categories(world, c.id) == {item.category} and remaining(c.id) >= item.volume_l]
+    same = [c for c in candidates if categories_in(world, c.id) == {item.category} and remaining(c.id) >= item.volume_l]
     if same:
         best = min(same, key=lambda c: remaining(c.id))
         return best.id, "（和同类放一起）"
 
-    empty = [c for c in candidates if not _categories(world, c.id) and c.capacity_l >= item.volume_l]
+    empty = [c for c in candidates if not categories_in(world, c.id) and c.capacity_l >= item.volume_l]
     if empty:
         best = min(empty, key=lambda c: (c.capacity_l, c.id))
         return best.id, "（新开一个空容器）"
@@ -124,7 +126,32 @@ def choose_container(world: World, item: NewItem) -> tuple[str | None, str]:
                   "需要清理或添置容器")
 
 
-def _record(world: World, item: NewItem, container: str, volume: float) -> str:
+def settle_category(world: World, item: NewItem) -> NewItem:
+    """类别对齐台账：同类才能放一起，"速冻食品"和"速冻"要算同一类。
+
+    1. 台账里已经有这样东西（名字或别名完全一样，如"饺子"），就用它的类别
+    2. 否则和已有类别互相包含（"速冻食品"⊃"速冻"、"乳制品类"⊃"乳制品"），就用已有的名字
+    3. 都不是就保留，入库时会给它开一个空容器
+    """
+    names = {item.name, *item.aliases}
+    for known in world.home.items.values():
+        if known.name in names or names & set(known.aliases):
+            return replace(item, category=known.category)
+    existing = {i.category for i in world.home.items.values()}
+    if item.category in existing:
+        return item
+    close = [c for c in existing if len(c) >= 2 and len(item.category) >= 2 and (c in item.category or item.category in c)]
+    if close:
+        return replace(item, category=max(close, key=len))
+    return item
+
+
+def largest_container(world: World, temperature: str) -> float:
+    """这个温区里最大的食物容器能装多少升；东西比它还大，就只能拆开分装。"""
+    return max((c.capacity_l for c in _food_containers(world, temperature)), default=0.0)
+
+
+def record_item(world: World, item: NewItem, container: str, volume: float) -> str:
     item_id = _new_item_id(world)
     world.home.items[item_id] = Item(
         id=item_id,
@@ -145,12 +172,12 @@ def _split(world: World, item: NewItem) -> tuple[list[tuple[str, float]], float]
     used: dict[str, float] = {}
 
     def room_left(cid: str) -> float:
-        return home.containers[cid].capacity_l - _used_volume(world, cid) - used.get(cid, 0.0)
+        return home.containers[cid].capacity_l - used_volume(world, cid) - used.get(cid, 0.0)
 
     while remaining > 1e-9:
         candidates = [
             c.id for c in _food_containers(world, item.temperature)
-            if _categories(world, c.id) <= {item.category}  # 空的或同类的，不混装
+            if categories_in(world, c.id) <= {item.category}  # 空的或同类的，不混装
             and room_left(c.id) > 1e-9
         ]
         if not candidates:
@@ -174,7 +201,7 @@ def assign(world: World, items: list[NewItem], commit: bool = True) -> IntakeRes
         if container:
             placement = Placement(item, container, note=note)
             if commit:
-                placement.item_id = _record(world, item, container, item.volume_l)
+                placement.item_id = record_item(world, item, container, item.volume_l)
             result.placements.append(placement)
             continue
 
@@ -187,9 +214,49 @@ def assign(world: World, items: list[NewItem], commit: bool = True) -> IntakeRes
             part = NewItem(item.name, item.category, item.temperature, volume, list(item.aliases))
             placement = Placement(part, cid, note=f"（分装 {n}/{len(parts)}）")
             if commit:
-                placement.item_id = _record(world, part, cid, volume)
+                placement.item_id = record_item(world, part, cid, volume)
             result.placements.append(placement)
         if left > 0:
             rest = NewItem(item.name, item.category, item.temperature, left, list(item.aliases))
             result.placements.append(Placement(rest, None, note=f"还剩 {left:g} 升放不下，需要清理或添置容器"))
     return result
+
+
+PARCEL_SIZE = (0.2, 0.14, 0.06)  # 仿真里包装的大小：一个扁平的袋子
+
+
+def intake_areas(world: World) -> list[str]:
+    return [s.id for s in world.home.storage.values() if s.kind == "intake"]
+
+
+def put_parcels(world: World, labels: list[str], area: str | None = None) -> list[str]:
+    """主人把买回来的东西摆在入库台上：每件一个包装，标签就是这件东西的说法。返回包装 id。"""
+    home = world.home
+    areas = [area] if area else intake_areas(world)
+    if not areas or areas[0] not in home.storage:
+        raise ValueError("家里没有登记入库台（kind 为 intake 的存放区），不知道东西摆在哪")
+    area = areas[0]
+    free = [s for s in range(home.storage[area].slots) if world.container_at(area, s) is None]
+    if len(labels) > len(free):
+        raise ValueError(f"{home.storage[area].name}只有 {len(free)} 个空位，摆不下 {len(labels)} 件东西")
+    ids = []
+    n = 1
+    for label, slot in zip(labels, free):
+        while f"parcel_{n}" in home.containers:
+            n += 1
+        pid = f"parcel_{n}"
+        home.containers[pid] = Container(
+            id=pid, name=f"包装 {n} 号", size_m=PARCEL_SIZE, location=area, slot=slot, kind=PARCEL, label=label
+        )
+        ids.append(pid)
+    return ids
+
+
+def parcels_on_counter(world: World) -> list[Container]:
+    """入库台上等着入库的包装，按台面和槽位排好。"""
+    home = world.home
+    return sorted(
+        (c for c in home.containers.values()
+         if c.kind == PARCEL and c.location in home.storage and home.storage[c.location].kind == "intake"),
+        key=lambda c: (c.location, c.slot),
+    )

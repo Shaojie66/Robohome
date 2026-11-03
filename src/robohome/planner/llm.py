@@ -9,6 +9,9 @@
 4. 预演失败就把补全后的计划和失败原因告诉大模型，让它重新规划；超过次数就放弃并说明原因
 
 大模型只负责"想"，不直接动手：真正执行仍然由调度器一步步检查后交给技能。
+
+入库（"今天买了……"）交给入库规划器：大模型只认入库台上每件包装是什么、放哪个温区，
+挑容器和走动按固定规矩写（见 planner/intake.py）。
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from ..world import World
 from .base import PlanningError, Step
 from .builder import normalize
 from .context import world_json
+from .intake import IntakePlanner, is_intake
 
 DEFAULT_MODEL = "claude-opus-5-5"  # 不指定后端时用 Claude
 
@@ -101,6 +105,24 @@ class LLMPlanner:
         self.attempts: list[dict] = []  # 最近一次规划每一轮：模型给的计划、补全后的计划、预演结果
 
     def plan(self, instruction: str, world: World) -> list[Step]:
+        if is_intake(instruction):
+            return self._intake(instruction, world)
+        return self._plan(instruction, world)
+
+    def _intake(self, instruction: str, world: World) -> list[Step]:
+        from ..intake.recognize import LLMRecognizer
+
+        intake = IntakePlanner(LLMRecognizer(self.backend))
+        self.transcript, self.attempts = [], []
+        try:
+            steps = intake.plan(instruction, world)
+        except PlanningError as e:
+            self.attempts.append({"model": [d.describe() for d in intake.decisions], "plan": [], "error": str(e)})
+            raise
+        self.attempts.append({"model": [d.describe() for d in intake.decisions], "plan": [s.describe() for s in steps], "error": None})
+        return steps
+
+    def _plan(self, instruction: str, world: World) -> list[Step]:
         from ..scheduler.core import simulate  # 避免循环导入
 
         messages: list[dict] = [

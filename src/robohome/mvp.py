@@ -1,4 +1,4 @@
-"""MVP 的五个任务和故障测试：按方案文档的验收标准，端到端跑规划 → 调度 → 模拟执行 → 回报。
+"""MVP 的五个任务、第二阶段的三个入库任务和故障测试：按方案文档的验收标准，端到端跑规划 → 调度 → 模拟执行 → 回报。
 
 验收标准（方案文档）：
 - 每个任务连续 20 次至少成功 18 次
@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .appliances.base import MockAppliance
+from .intake.core import TEMP_NAMES, put_parcels
 from .planner.base import Planner
 from .scheduler.core import Report, Scheduler
 from .spec.loader import load_home
@@ -31,7 +32,9 @@ Check = Callable[[World, Report], list[str]]
 
 # ---------- 故障注入 ----------
 
-FAULT_HELP = "offline:<家电> / busy:<家电> / missing:<容器> / drop:<容器> / stuck:<部件> / unknown:<存放区>"
+FAULT_HELP = (
+    "offline:<家电> / busy:<家电> / missing:<容器> / drop:<容器> / stuck:<部件> / unknown:<存放区> / unreadable:<包装>"
+)
 # 规划时看不见、只有动手时才会发现的故障。这类故障如果在规划阶段就停了，说明计划本身有问题，不算验证过
 HIDDEN_FAULTS = ("missing", "drop", "stuck")
 
@@ -60,6 +63,11 @@ def apply_fault(world: World, fault: str) -> None:
         if target not in home.storage and target not in home.appliances:
             raise ValueError(f"没有这个存放区：{target}")
         world.unknown_objects.setdefault(target, []).append("一个没登记的袋子")
+    elif kind == "unreadable":  # 包装上的标签看不清（反光、被挡住、皱了）
+        c = home.containers.get(target)
+        if c is None or c.kind != "parcel":
+            raise ValueError(f"入库台上没有这件包装：{target}")
+        c.label = ""
     else:
         raise ValueError(f"不认识的故障类型：{fault}（可用 {FAULT_HELP}）")
 
@@ -119,12 +127,61 @@ def _check_tidy(world: World, report: Report) -> list[str]:
     return [f"桌上还有：{'、'.join(left)}"] if left else []
 
 
+def _intake_check(parcels: tuple[tuple[str, tuple[str, ...]], ...]) -> Check:
+    """入库做对了没有：每件包装都装进了能放它的温区，登记的名字以后按包装上的叫法找得到。
+
+    标签看不清的包装可以留在入库台上，但必须告诉主人；认得出的留下了就算没做好。
+    """
+
+    def check(world: World, report: Report) -> list[str]:
+        problems = []
+        stowed = {r.step.args.get("parcel"): r.step.args for r in report.results if r.ok and r.step.skill == "stow"}
+        for n, (label, temps) in enumerate(parcels, 1):
+            pid = f"parcel_{n}"
+            left = world.home.containers.get(pid)
+            if left is not None:
+                told = any(left.name in note for note in report.notices)
+                if not told:
+                    problems.append(f"{left.name}「{label}」留在{left.location}，也没告诉主人")
+                elif left.label:
+                    problems.append(f"{left.name}「{label}」认得出却没入库")
+                continue
+            args = stowed.get(pid)
+            if args is None:
+                problems.append(f"「{label}」不见了，也没有装盒记录")
+                continue
+            area = world.home.storage_of(args["container"])
+            if area is None or area.temperature not in temps:
+                where = area.name if area else args["container"]
+                problems.append(f"「{label}」放进了{where}，应该{'或'.join(TEMP_NAMES[t] for t in temps)}")
+            names = [args.get("name") or "", *(args.get("aliases") or [])]
+            if not any(name and name in label for name in names):
+                problems.append(f"「{label}」登记成了{args.get('name')}，以后按包装上的叫法找不到")
+            if not any(i.name == args.get("name") and i.container == args["container"] for i in world.home.items.values()):
+                problems.append(f"「{label}」装好了，台账里却没有")
+        return problems
+
+    return check
+
+
 @dataclass(frozen=True)
 class Task:
     id: str
     instruction: str
     check: Check
     faults: tuple[tuple[str, str], ...] = ()  # (故障, 期望结果)：stop 必须安全停下 / notice 照常完成但要提醒主人
+    # 入库任务：开始前摆在入库台上的包装（标签, 可以放的温区），依次是 parcel_1、parcel_2……
+    parcels: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+def _intake_task(id: str, instruction: str, parcels, faults) -> Task:
+    return Task(id, instruction, _intake_check(parcels), faults, parcels)
+
+
+def setup_task(world: World, task: Task) -> None:
+    """任务开始前的现场：入库任务先把买回来的东西摆到入库台上。"""
+    if task.parcels:
+        put_parcels(world, [label for label, _ in task.parcels])
 
 
 TASKS: list[Task] = [
@@ -155,6 +212,24 @@ TASKS: list[Task] = [
         ("stuck:dish_cabinet_door", "stop"),
         ("unknown:dining_table", "notice"),
     )),
+    # 第二阶段第 1 周：入库闭环。苹果、鸡蛋、牛奶放冷藏或常温都合理。
+    # 卡住的门选一定会用到的那扇（虾仁一定进冷冻、酸奶一定进冷藏），否则模型把鸡蛋放常温时故障根本碰不到
+    _intake_task(
+        "intake1", "今天买了一斤五花肉、两盒酸奶和一袋苹果",
+        (("一斤五花肉", ("frozen",)), ("两盒酸奶", ("chilled",)), ("一袋苹果", ("chilled", "ambient"))),
+        (("unreadable:parcel_2", "notice"), ("drop:parcel_1", "stop"), ("stuck:freezer_door", "stop")),
+    ),
+    _intake_task(
+        "intake2", "买了虾仁、一盒鸡蛋、挂面和一袋饺子",
+        (("虾仁", ("frozen",)), ("一盒鸡蛋", ("chilled", "ambient")), ("挂面", ("ambient",)), ("一袋饺子", ("frozen",))),
+        (("unreadable:parcel_4", "notice"), ("stuck:freezer_door", "stop"), ("missing:parcel_3", "stop")),
+    ),
+    _intake_task(
+        "intake3", "刚从超市回来，买了鸡翅、牛奶、西兰花、酸奶和面粉",
+        (("鸡翅", ("frozen",)), ("牛奶", ("chilled", "ambient")), ("西兰花", ("chilled",)), ("酸奶", ("chilled",)),
+         ("面粉", ("ambient",))),
+        (("unreadable:parcel_1", "notice"), ("drop:parcel_2", "stop"), ("stuck:chiller_door", "stop")),
+    ),
 ]
 
 
@@ -226,6 +301,8 @@ def run_task(
     """body 给了就把世界接到一个身体上（例如物理仿真），技能会让它真的做一遍。"""
     world = fresh_world(spec)
     baseline = fresh_world(spec)  # 没有故障的同一个家，用来确认停下真的是因为故障
+    setup_task(world, task)
+    setup_task(baseline, task)
     if fault:
         apply_fault(world, fault)
     if body is not None:

@@ -116,6 +116,8 @@ class World:
 
     def _label(self, container_id: str) -> str:
         c = self.home.containers[container_id]
+        if c.kind == "parcel":  # 待入库的包装：扫描到的标签
+            return f"{c.name}「{c.label}」" if c.label else f"{c.name}（标签看不清）"
         contents = self._contents(container_id)
         return f"{c.name}（{'、'.join(contents)}）" if contents else c.name
 

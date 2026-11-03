@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..appliances.base import ApplianceError
+from ..intake.core import TEMP_NAMES, NewItem, record_item, used_volume
+from ..spec.models import FOOD_KINDS, PARCEL
 from ..world import FLOOR, World
 
 HELD = "robot"  # 容器被拿在手里时的位置
@@ -26,6 +28,8 @@ class Skill:
     params: dict[str, dict]  # 参数名 → JSON Schema
     check: Callable[..., str | None]
     run: Callable[..., str]
+    # 交给大模型规划时列不列出来。装盒、提醒主人由入库规划器按固定规矩写，大模型不用写
+    for_planner: bool = True
 
 
 # ---------- 辅助 ----------
@@ -232,6 +236,69 @@ def _run_pour(world: World, container: str, into: str) -> str:
     return f"把{names}倒进{world.home.appliances[into].name}"
 
 
+# ---------- stow：扫描包装、装进容器 ----------
+
+
+def _check_stow(
+    world: World, parcel: str, container: str, name: str, category: str, temperature: str, volume_l: float,
+    aliases: list[str] | None = None,
+) -> str | None:
+    home = world.home
+    p = home.containers.get(parcel)
+    if p is None or p.kind != PARCEL:
+        return f"{parcel} 不是待入库的包装"
+    if world.robot.holding != parcel:
+        return f"手里没有拿着{p.name}"
+    c = home.containers.get(container)
+    if c is None:
+        return f"容器 {container} 不存在"
+    area = home.storage.get(c.location)
+    if c.kind not in FOOD_KINDS or area is None or area.kind != "storage":
+        return f"{c.name}不是放在存放区里的食物容器，不能往里装东西"
+    if not name or temperature not in TEMP_NAMES:
+        return "没说清楚装进去的是什么、要放在哪个温区"
+    if isinstance(volume_l, bool) or not isinstance(volume_l, (int, float)) or volume_l <= 0:
+        return f"体积不对：{volume_l}"
+    if err := _at(world, _waypoint_for_location(world, c.location)):
+        return err
+    if err := _enclosure_open(world, c.location):
+        return err
+    left = c.capacity_l - used_volume(world, container)
+    if volume_l > left + 1e-9:
+        return f"{c.name}只剩 {left:g} 升，装不下 {volume_l:g} 升的{name}"
+    return None
+
+
+def _run_stow(
+    world: World, parcel: str, container: str, name: str, category: str, temperature: str, volume_l: float,
+    aliases: list[str] | None = None,
+) -> str:
+    home = world.home
+    p, c = home.containers[parcel], home.containers[container]
+    if world.body is not None:
+        world.body.stow(world, parcel, container)  # 没放进去会抛 SkillFailed，并把包装记到它实际落下的地方
+    if container in world.missing_containers:  # 和 pick 一样：到了才发现容器不在，包装还在手里
+        raise SkillFailed(f"到了 {c.location} 槽位 {c.slot} 没找到{c.name}，台账可能过期")
+    # 装好了才记账：包装没了，容器里多了一件东西
+    record_item(world, NewItem(name, category, temperature, float(volume_l), list(aliases or [])), container, float(volume_l))  # type: ignore[arg-type]
+    del home.containers[parcel]
+    world.robot.holding = None
+    label = f"「{p.label}」" if p.label else ""
+    return f"扫描{p.name}{label}：{name}，装进{c.name}"
+
+
+# ---------- notify：告诉主人一件事 ----------
+
+
+def _check_notify(world: World, message: str) -> str | None:
+    return None if isinstance(message, str) and message.strip() else "提醒内容是空的"
+
+
+def _run_notify(world: World, message: str) -> str:
+    world.notices.append(message)
+    return f"提醒主人：{message}"
+
+
 # ---------- appliance ----------
 
 
@@ -362,6 +429,30 @@ SKILLS: dict[str, Skill] = {
             _check_appliance,
             _run_appliance,
         ),
+        Skill(
+            "stow",
+            "扫描手里包装的标签，把里面的东西装进一个食物容器，并记进台账；包装本身不拆，机器人不碰刀具",
+            {
+                "parcel": _s("string", "手里拿着的包装 id"),
+                "container": _s("string", "要装进去的容器 id"),
+                "name": _s("string", "物品名"),
+                "category": _s("string", "类别"),
+                "temperature": _s("string", "温区：ambient / chilled / frozen"),
+                "volume_l": _s("number", "体积（升）"),
+                "aliases": {"type": "array", "items": {"type": "string"}, "description": "别名"},
+            },
+            _check_stow,
+            _run_stow,
+            for_planner=False,
+        ),
+        Skill(
+            "notify",
+            "告诉主人一件事，例如有件东西认不出来、先留在入库台上",
+            {"message": _s("string", "要告诉主人的话")},
+            _check_notify,
+            _run_notify,
+            for_planner=False,
+        ),
     ]
 }
 
@@ -380,4 +471,5 @@ def catalog() -> list[dict]:
             },
         }
         for s in SKILLS.values()
+        if s.for_planner
     ]

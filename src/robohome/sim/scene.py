@@ -28,6 +28,7 @@ COLORS = {
     "chilled": "0.86 0.93 0.97 1",
     "ambient": "0.80 0.70 0.58 1",
     "surface": "0.62 0.45 0.30 1",
+    "intake": "0.85 0.80 0.70 1",
     "appliance": "0.30 0.32 0.36 1",
     "door": "0.93 0.93 0.92 1",
     "appliance_door": "0.20 0.21 0.24 1",
@@ -38,6 +39,7 @@ CONTAINER_COLORS = {
     "bowl": "0.96 0.96 0.94 1",
     "cup": "0.55 0.80 0.62 1",
     "object": "0.80 0.45 0.45 1",
+    "parcel": "0.76 0.60 0.40 1",  # 牛皮纸袋
 }
 
 
@@ -181,7 +183,7 @@ def _area_xml(home: Home, area: Area, info: SceneInfo, stuck, actuators: list[st
     if area.is_appliance:
         color = COLORS["appliance"]
     elif area.style == "surface":
-        color = COLORS["surface"]
+        color = COLORS["intake" if home.storage[area.id].kind == "intake" else "surface"]
     else:
         color = COLORS[home.storage[area.id].temperature]
     parts: list[str] = []
@@ -313,7 +315,7 @@ def _container_xml(c: Container, area: Area, slot: int) -> str:
     x, y, z = area.slot_local(slot)
     pos = to_world(area, (x, y, z + c.size_m[2] / 2 + 0.002))
     shape, size = container_shape(c)
-    mass = 0.2 + 0.15 * c.capacity_l
+    mass = 0.5 if c.kind == "parcel" else 0.2 + 0.15 * c.capacity_l
     rgba = CONTAINER_COLORS.get(c.kind, CONTAINER_COLORS["box"])
     lid = ""
     if c.kind in ("box", "jar"):  # 盖子颜色深一点，看得出是保鲜盒

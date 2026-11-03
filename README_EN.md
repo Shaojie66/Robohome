@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=6d0eef3; updated=2026-11-02 -->
+<!-- README_SYNC: source=6d0eef3; updated=2026-11-03 -->
 <p align="center">
   <a href="./README.md">简体中文</a> · English
 </p>
@@ -50,9 +50,10 @@ The expensive part of bringing a general-purpose robot home is getting it to cop
 Everything below is reproducible from this repo:
 
 - **Five household tasks end to end**: check the fridge, move frozen beef to the chiller to thaw, air-fry popcorn chicken, unload the dishwasher, clear the table. Each run checks the resulting state of the home, not just whether it raised an error.
-- **17 fault cases all stop safely**: appliance offline, stuck door, dropped item, inventory out of sync with reality, and more. They pass with both the mock backend and the MuJoCo simulation.
-- **Local LLM first**: Ollama + `qwen3:8b` by default, no API key needed. On the author's Mac, each of the five tasks passed 20 runs in a row, with the slowest single run around 2 minutes. Claude is supported as an alternative.
-- **Intake**: say "bought a pound of pork belly and two tubs of yogurt" and it recognizes the items and assigns containers by temperature zone and capacity. Preview only by default; the inventory changes only after you confirm.
+- **Grocery intake, end to end**: put the shopping on the intake counter and say "bought a pound of pork belly, two tubs of yogurt and a bag of apples". The robot reads each label, works out what it is, and stows it into a standard container in the right temperature zone, recording where it went. Anything it can't read or fit stays on the counter and the owner is told why.
+- **26 fault cases all stop safely**: appliance offline, stuck door, dropped item, inventory out of sync with reality, and more. They pass with both the mock backend and the MuJoCo simulation.
+- **Local LLM first**: Ollama + `qwen3:8b` by default, no API key needed. On the author's Mac, each of the five household tasks and three grocery sentences passed 20 runs in a row, with the slowest single run around 2 minutes. Claude is supported as an alternative.
+- **Intake preview**: without letting the robot move, you can just see what it recognized and which containers it would use; the inventory changes only after you confirm.
 - **Simulation generated from the spec**: give storage areas and appliances their dimensions and you get cabinets, drawers and hinged doors. Doors have to be pulled open, and things can actually fall.
 
 ## Quick start
@@ -64,23 +65,24 @@ git clone https://github.com/shaojie66/robohome.git && cd robohome
 pip install -e ".[dev]"
 
 robohome validate                       # validate the sample kitchen data/kitchen_example.json
-robohome mvp                            # run the five MVP tasks once and check the home state afterwards
+robohome mvp                            # run the five household tasks and three intake tasks once and check the home state afterwards
 robohome run "把牛肉拿出来解冻"          # one instruction end to end ("take the beef out to thaw")
 ```
 
 The last line of `robohome mvp` should be:
 
 ```
-共 5/5 通过
+共 8/8 通过
 ```
 
-(That reads "5/5 passed".) Then try faults and intake:
+(That reads "8/8 passed".) Then try faults and intake:
 
 ```bash
 robohome run "把牛肉拿出来解冻" --fault offline:microwave   # appliance offline
 robohome run "把牛肉拿出来解冻" --fault missing:box_f1      # inventory doesn't match reality
 robohome mvp --faults                   # inject several faults per task and check it stops safely
 robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"   # intake (preview only)
+robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果" --run   # intake loop: the robot stows each item in the right zone
 robohome skills                         # skill list with parameter schemas used to constrain the LLM
 pytest
 ```
@@ -90,7 +92,7 @@ pytest
 ```bash
 ollama pull qwen3:8b
 robohome run "牛肉化一下，晚上要用" --planner local
-robohome intake "刚从超市回来，买了排骨、虾仁和一箱牛奶" --recognizer local
+robohome intake "刚从超市回来，买了排骨、虾仁和一箱牛奶" --recognizer local --run --sim --record out/
 ```
 
 Any OpenAI Chat Completions compatible server works (llama.cpp server, vLLM, LM Studio); point `--base-url` at it. For Claude, install `.[claude]`, set `ANTHROPIC_API_KEY`, and use `--planner claude`.
@@ -99,7 +101,7 @@ Any OpenAI Chat Completions compatible server works (llama.cpp server, vLLM, LM 
 
 ```bash
 pip install -e ".[sim]"                 # MuJoCo + Pillow
-robohome mvp --sim                      # the five tasks in simulation
+robohome mvp --sim                      # all eight tasks in simulation
 robohome mvp --sim --faults             # faults happen physically
 robohome mvp --sim --record out/        # record every run as a GIF
 ```
@@ -124,7 +126,7 @@ planner/      The LLM (or rules) writes only the substantive actions: pick, plac
 scheduler/    Every step passes: safety rules → skill preconditions → execution; any failure stops immediately
    │
    ▼
-skills/       navigate / open / close / pick / place / inspect / pour / appliance
+skills/       navigate / open / close / pick / place / inspect / pour / appliance / stow / notify
    │          in-memory mock, or performed in MuJoCo with --sim
    ▼
 spec/         rooms and waypoints, fixtures, storage areas, standard containers, inventory, appliances (appliances/ exposes one call interface)
@@ -138,10 +140,10 @@ The LLM only thinks; it never acts directly. After a stop, the robot photographs
 | `skills/` | Skill library; each skill = preconditions + execution | Mock backend; performed in MuJoCo with `--sim` |
 | `appliances/` | Appliance adapters behind one `call(action, params)` interface | Simulated appliances; Home Assistant / Mi Home later |
 | `scheduler/` | Task queue, safety rules, precondition checks, fail-stop, reporting | Working |
-| `planner/` | One sentence → sequence of skill calls | Rule-based planner (offline) + LLM planner |
-| `intake/` | Recognize new items → assign containers → update inventory | Keyword recognizer (offline) + LLM recognizer (text or photo) |
+| `planner/` | One sentence → sequence of skill calls | Rule-based planner (offline) + LLM planner; intake goes to `planner/intake.py` |
+| `intake/` | Recognize new items → assign containers → update inventory | Keyword recognizer (offline) + LLM recognizer (text, photo, or labels on the intake counter) |
 | `llm/` | Local models (Ollama etc.) or Claude behind the same interface | Working |
-| `sim/` | Generate the MuJoCo scene from the spec, record video and photos | All five tasks and 17 faults pass in simulation |
+| `sim/` | Generate the MuJoCo scene from the spec, record video and photos | All eight tasks and 26 faults pass in simulation |
 
 ## Safety boundaries
 
@@ -149,6 +151,7 @@ The LLM only thinks; it never acts directly. After a stop, the robot photographs
 - It stays out of no-go zones (such as in front of the stove) and closes the doors it opened before leaving a waypoint.
 - It won't start a hazardous appliance while holding something; starting one requires a run time no longer than the appliance's `max_minutes` in the spec (default 30).
 - If an appliance's state can't be read, it is treated as possibly running. The robot won't interrupt an appliance it didn't start.
+- During intake, food only goes into the right temperature zone and each container holds one kind of thing. The robot never opens packaging; if one item doesn't fit a container, the owner is asked to split it.
 
 Full rules: [safety principles](./docs/how-it-works.md#安全原则) (Chinese).
 
@@ -157,9 +160,9 @@ Full rules: [safety principles](./docs/how-it-works.md#安全原则) (Chinese).
 These need replacing or validating before moving to a real robot:
 
 - The robot is kinematic: it follows trajectories, ignores joint torques and doesn't collide with furniture. Reach is estimated from a typical humanoid.
-- Grasping is simplified to a "magnetic" attach; no gripper simulation.
+- Grasping is simplified to a "magnetic" attach; no gripper simulation. Stowing (open the lid, put it in, close it) is simplified to "the package lands on the container".
 - Appliance internals (heating, timers) are simulated, not yet connected to Home Assistant or Mi Home.
-- The rule-based planner only knows fixed phrasings of the five tasks; free-form instructions need an LLM.
+- The rule-based planner only knows fixed phrasings of the five tasks plus intake; free-form instructions need an LLM.
 - There is one sample kitchen so far; no real home has been packaged yet.
 
 ## Roadmap
@@ -168,6 +171,13 @@ These need replacing or validating before moving to a real robot:
 2. LLM planning layer + intake module ✓
 3. Scheduler hardening + five MVP tasks end to end, systematic fault tests ✓
 4. MuJoCo physics backend for the skill library, planner and scheduler unchanged ✓
+
+Phase 2:
+
+1. Grocery intake loop: the robot stows new items into the right zone itself and records where they went ✓
+2. More realistic simulation: walk around furniture, find containers by their labels when they're slightly off, check reach against Unitree G1's published specs
+3. Phone entry point + home server: run the service on a computer at home, send instructions and get reports from a phone browser, LAN only
+4. Open-source release
 
 ## Get involved
 

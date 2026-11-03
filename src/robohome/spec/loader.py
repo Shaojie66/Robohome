@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .models import (
+    PARCEL,
     Appliance,
     Container,
     Fixture,
@@ -92,7 +93,7 @@ def parse_home(data: dict) -> Home:
                 id=c["id"],
                 name=c["name"],
                 size_m=tuple(c["size_m"]),
-                capacity_l=c["capacity_l"],
+                capacity_l=c.get("capacity_l", 0.0),
                 location=c["location"],
                 slot=c.get("slot", 0),
                 pose=_pose(c.get("pose")),
@@ -101,6 +102,7 @@ def parse_home(data: dict) -> Home:
                 safe_for=sorted(set(c.get("safe_for", [])) | ({"microwave"} if c.get("microwave_safe") else set())),
                 home=c.get("home"),
                 home_slot=c.get("home_slot"),
+                label=c.get("label", ""),
             )
             for c in data.get("containers", [])
         ]
@@ -147,6 +149,8 @@ def validate(home: Home) -> None:
             errors.append(f"部件 {f.id}: 围住的区域 {f.encloses} 不存在")
 
     for s in home.storage.values():
+        if s.kind not in ("storage", "surface", "intake"):
+            errors.append(f"存放区 {s.id}: kind 只能是 storage / surface / intake")
         if s.room not in home.rooms:
             errors.append(f"存放区 {s.id}: 房间 {s.room} 不存在")
         if s.waypoint:
@@ -172,6 +176,9 @@ def validate(home: Home) -> None:
         if key in used:
             errors.append(f"容器 {c.id} 和 {used[key]} 占了同一个槽位")
         used[key] = c.id
+        area = home.storage.get(c.location)
+        if c.kind == PARCEL and (area is None or area.kind != "intake"):
+            errors.append(f"容器 {c.id}: 待入库的包装只能放在入库台（kind 为 intake 的存放区）上")
         if c.home is not None:
             if c.home not in home.storage:
                 errors.append(f"容器 {c.id}: 原位 {c.home} 不是存放区")

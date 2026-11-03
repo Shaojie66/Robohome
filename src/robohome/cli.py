@@ -15,6 +15,8 @@
     robohome run "把牛肉拿出来解冻" --planner local       # 用本地模型规划（默认 Ollama + qwen3:8b）
     robohome run "把牛肉拿出来解冻" --planner claude      # 用 Claude 规划（需要 ANTHROPIC_API_KEY）
     robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果"           # 只预览，不改台账
+    robohome intake "今天买了一斤五花肉、两盒酸奶和一袋苹果" --run     # 摆上入库台，机器人逐件装盒、放进对应温区
+    robohome intake "..." --run --recognizer local --sim --record out/  # 本地模型认标签，在仿真里做并录像
     robohome intake "..." --spec my_home.json --save my_home.json --yes  # 确认后写入台账
     robohome intake --recognizer local --model qwen2.5vl:7b --image receipt.jpg
     robohome skills
@@ -27,11 +29,12 @@ import json
 import sys
 from pathlib import Path
 
-from .intake.core import assign
-from .intake.recognize import KeywordRecognizer, LLMRecognizer
+from .intake.core import assign, parcels_on_counter, put_parcels
+from .intake.recognize import KeywordRecognizer, LLMRecognizer, split_pieces
 from .llm.base import LLMError
 from .mvp import FAULT_HELP, TASKS, apply_fault, run_mvp, summarize
 from .planner.base import Planner
+from .planner.intake import IntakePlanner
 from .planner.rules import RulePlanner
 from .scheduler.core import Scheduler
 from .skills.library import catalog
@@ -189,6 +192,8 @@ def _intake(args, home, world: World) -> int:
     if args.image and not Path(args.image).is_file():
         print(f"找不到照片：{args.image}", file=sys.stderr)
         return 2
+    if args.run:
+        return _intake_run(args, home, world)
     if args.recognizer in ("local", "claude"):
         from .llm import make_backend
 
@@ -214,6 +219,64 @@ def _intake(args, home, world: World) -> int:
         else:
             print(f"以上只是预览，台账没有改动。确认无误后加 --yes 写入 {args.save}")
     return 0 if result.ok else 1
+
+
+def _intake_run(args, home, world: World) -> int:
+    """让机器人真的做一遍：东西摆上入库台 → 扫描、识别 → 逐件装盒、放进对应温区 → 回报。"""
+    if args.image:
+        print("--run 按入库台上每件包装的标签识别，不用照片；照片识别请去掉 --run 只预览", file=sys.stderr)
+        return 2
+    if not parcels_on_counter(world):
+        pieces = split_pieces(args.text)
+        if not pieces:
+            print("入库台上没有东西，也没说买了什么", file=sys.stderr)
+            return 2
+        try:
+            put_parcels(world, pieces)  # 模拟主人把买回来的东西摆上入库台，每件一个包装
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
+    if args.recognizer in ("local", "claude"):
+        from .llm import make_backend
+
+        try:
+            recognizer = LLMRecognizer(make_backend(args.recognizer, args.model, args.base_url, effort="low"))
+        except LLMError as e:
+            print(e, file=sys.stderr)
+            return 2
+    else:
+        recognizer = KeywordRecognizer()
+    planner = IntakePlanner(recognizer)
+    rec = None
+    if args.sim or args.record:
+        from . import sim
+
+        if not sim.available():
+            print(sim.INSTALL_HINT, file=sys.stderr)
+            return 2
+        from .sim.body import SimBody
+        from .sim.render import Recorder
+
+        rec = Recorder(args.record) if args.record else None
+        SimBody.attach(world, recorder=rec)
+    scheduler = Scheduler(world, planner)
+    scheduler.submit(args.text or "入库")
+    [report] = scheduler.run_pending()
+    if planner.decisions:
+        print("识别和分配：\n" + "\n".join(f"  {d.describe()}" for d in planner.decisions) + "\n")
+    print(report.render())
+    if rec is not None:
+        gif = rec.save_gif(Path(args.record) / "intake.gif")
+        print(f"录像：{gif}" if gif else "这台机器上渲染不可用，只跑了物理，没有录像", file=sys.stderr)
+    if args.save:
+        if not report.ok:
+            print("任务没有做完，台账没有写入", file=sys.stderr)
+        elif args.yes:
+            save_home(world.home, args.save)
+            print(f"台账已写入 {args.save}")
+        else:
+            print(f"台账没有写入。确认无误后加 --yes 写入 {args.save}")
+    return 0 if report.ok and not report.notices else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,6 +308,9 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--save", help="把更新后的台账写到这个文件（要加 --yes 才真正写入）")
     i.add_argument("--yes", action="store_true", help="确认写入台账；不加时只预览")
     i.add_argument("--force", action="store_true", help="允许覆盖仓库自带的样例文件")
+    i.add_argument("--run", action="store_true", help="让机器人真的做：东西摆上入库台，逐件装盒、放进对应温区")
+    i.add_argument("--sim", action="store_true", help="配合 --run，在 MuJoCo 物理仿真里做")
+    i.add_argument("--record", help="配合 --run，录成 GIF 存到这个目录（会自动打开 --sim）")
 
     m = sub.add_parser("mvp", help="端到端跑 MVP 的五个任务（可注入故障、可重复多次）")
     m.add_argument("--spec", default=str(DEFAULT_SPEC))

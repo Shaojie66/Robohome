@@ -62,33 +62,51 @@ def _parse_quantity(piece: str) -> tuple[float, str]:
 
 
 def _match(core: str):
-    """多字关键词按包含匹配，单字关键词（米、盐、虾、鱼……）必须整个词就是它，避免"玉米"变成大米。"""
+    """多字关键词按包含匹配，单字关键词（米、盐、虾、鱼……）必须整个词就是它，避免"玉米"变成大米。
+
+    返回 (表里那一行, 命中的关键词)。
+    """
     if any(a in core for a in AMBIGUOUS):
-        return None
-    best, best_len = None, 0
+        return None, ""
+    best, best_key = None, ""
     for entry in KEYWORDS:
         for k in entry[0]:
             hit = (k in core) if len(k) > 1 else (core == k)
-            if hit and len(k) > best_len:
-                best, best_len = entry, len(k)
-    return best
+            if hit and len(k) > len(best_key):
+                best, best_key = entry, k
+    return best, best_key
+
+
+def split_pieces(text: str) -> list[str]:
+    """"今天买了一斤五花肉、两盒酸奶和一袋苹果" → ["一斤五花肉", "两盒酸奶", "一袋苹果"]。"""
+    pieces = (_PREFIX.sub("", p.strip()) for p in _SPLIT.split(text or ""))
+    return [p for p in pieces if p]
 
 
 class KeywordRecognizer:
     def recognize(self, text: str) -> tuple[list[NewItem], list[str]]:
         items, unknown = [], []
-        for piece in _SPLIT.split(text):
-            piece = _PREFIX.sub("", piece.strip())
-            if not piece:
-                continue
+        for piece in split_pieces(text):
             portions, core = _parse_quantity(piece)
-            entry = _match(core)
+            entry, key = _match(core)
             if entry is None:
                 unknown.append(piece)
                 continue
             _, name, category, temp, vol = entry
-            items.append(NewItem(name, category, temp, round(vol * portions, 2)))  # type: ignore[arg-type]
+            # 记下包装上的叫法（五花肉、虾仁），以后主人这么说也找得到
+            aliases = [key] if key != name else []
+            items.append(NewItem(name, category, temp, round(vol * portions, 2), aliases))  # type: ignore[arg-type]
         return items, unknown
+
+    def recognize_labels(
+        self, labels: list[str | None], instruction: str = "", categories: list[str] | None = None
+    ) -> list[NewItem | None]:
+        """入库台上每件包装的标签 → 物品；看不清或认不出的是 None。一个标签只算一件东西。"""
+        out: list[NewItem | None] = []
+        for label in labels:
+            items, unknown = self.recognize(label) if label else ([], [])
+            out.append(items[0] if len(items) == 1 and not unknown else None)
+        return out
 
 
 RECOGNIZE_SCHEMA = {
@@ -115,11 +133,19 @@ RECOGNIZE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# 存放温区的家规。Mac 上 qwen3:8b 实测：不给这张表时，温度为 0 的情况下 20 次都把挂面放冷冻、西兰花放常温
+STORAGE_RULES = """存放温区按这张表（主人另有说法时听主人的）：
+- 冷冻 frozen：生肉、禽肉、水产（虾、鱼）、速冻食品（饺子、汤圆、馄饨）。生鲜肉类和水产默认冷冻，除非主人说马上要吃
+- 冷藏 chilled：牛奶、酸奶等乳制品，鸡蛋，新鲜蔬菜（西兰花、青菜、生菜），水果，熟食
+- 常温 ambient：米、面粉、挂面、面条等干货，调料，罐头，零食，常温奶
+体积按包装估计，没写数量的按一份常见包装算（一般 0.5 到 2 升），例如一斤肉约 0.5 升、一盒鸡蛋约 1.5 升、一袋面粉约 2 升。"""
+
 RECOGNIZE_PROMPT = """你在帮一个家庭机器人做"入库"：主人刚买回一些东西，需要列出每一件物品，供机器人分配到标准容器里。
 
 每件物品给出：通用名、类别、存放温区（frozen 冷冻 / chilled 冷藏 / ambient 常温）、大概占用体积（升，按包装估计），以及主人可能用到的别名。
-同一种东西买了多份时合并成一件，体积相加。生鲜肉类和水产默认冷冻，除非主人说马上要吃。
-家里已有的类别：{categories}。能归入已有类别就用已有的名字。"""
+同一种东西买了多份时合并成一件，体积相加。
+""" + STORAGE_RULES + """
+家里已有的类别：{categories}。能归入已有类别就用已有的名字；归不进去就直接起一个常见的新类别名（如 水果、蔬菜、水产、饮品、零食），不要反复斟酌。"""
 
 
 MAX_ITEM_VOLUME_L = 50.0
@@ -146,6 +172,39 @@ def validate_items(raw_items: list[dict]) -> tuple[list[NewItem], list[str]]:
             aliases = [str(a) for a in (i.get("aliases") or []) if str(a).strip()]
             items.append(NewItem(name, category, temp, volume, aliases))
     return items, rejected
+
+
+LABELS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "parcels": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "parcel": {"type": "integer", "description": "包装编号"},
+                    "readable": {"type": "boolean", "description": "能确定这件包装是什么食物就是 true"},
+                    "name": {"type": "string", "description": "物品的通用名，如 牛奶、五花肉"},
+                    "category": {"type": "string", "description": "类别，优先用已有类别"},
+                    "temperature": {"type": "string", "enum": ["ambient", "chilled", "frozen"]},
+                    "volume_l": {"type": "number", "description": "大概占用体积，单位升"},
+                    "aliases": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["parcel", "readable", "name", "category", "temperature", "volume_l", "aliases"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["parcels"],
+    "additionalProperties": False,
+}
+
+LABELS_PROMPT = """你在帮一个家庭机器人做"入库"：主人把买回来的东西摆在入库台上，机器人扫描了每件包装的标签。你要判断每件包装是什么，供机器人装进标准容器、放进对应的温区。
+
+每件包装输出一条，parcel 填它的编号，一件不漏、不合并、不拆分。每条给出：通用名、类别、存放温区（frozen 冷冻 / chilled 冷藏 / ambient 常温）、大概占用体积（升，按包装上的数量估计），以及主人以后可能用到的叫法（aliases，包含标签上的叫法）。
+判断不了是什么食物的，readable 填 false。
+""" + STORAGE_RULES + """
+家里已有的类别：{categories}。能归入已有类别就用已有的名字；归不进去就直接起一个常见的新类别名（如 水果、蔬菜、水产、饮品、零食），不要反复斟酌。"""
 
 
 class LLMRecognizer:
@@ -176,3 +235,33 @@ class LLMRecognizer:
         items, rejected = validate_items(data["items"])
         unknown = [str(u) for u in (data.get("unrecognized") or [])]
         return items, unknown + rejected
+
+    def recognize_labels(
+        self, labels: list[str | None], instruction: str = "", categories: list[str] | None = None
+    ) -> list[NewItem | None]:
+        """一次问完入库台上所有看得清的标签。模型漏掉、重复、不合格的那件就当认不出，留给主人确认。"""
+        readable = [(n, label) for n, label in enumerate(labels, 1) if label]
+        out: list[NewItem | None] = [None] * len(labels)
+        if not readable:
+            return out
+        system = LABELS_PROMPT.format(categories="、".join(categories or []) or "暂无")
+        listing = "\n".join(f"{n}. {label}" for n, label in readable)
+        text = f"入库台上的包装：\n{listing}" + (f"\n\n主人说：{instruction}" if instruction else "")
+        try:
+            data, _ = self.backend.complete_json(system, [self.backend.user_message(text)], LABELS_SCHEMA, "intake_labels")
+        except LLMError as e:
+            raise RuntimeError(f"识别失败：{e}") from e
+        if not isinstance(data, dict) or not isinstance(data.get("parcels"), list):
+            raise RuntimeError("识别失败：返回的结构不对")
+        wanted = {n for n, _ in readable}
+        seen: set[int] = set()
+        for entry in data["parcels"]:
+            n = entry.get("parcel") if isinstance(entry, dict) else None
+            if not isinstance(n, int) or isinstance(n, bool) or n not in wanted or n in seen:
+                continue  # 编号对不上的不要，免得把一件东西记到另一件包装上
+            seen.add(n)
+            if entry.get("readable") is not True:
+                continue
+            items, _ = validate_items([entry])
+            out[n - 1] = items[0] if items else None
+        return out

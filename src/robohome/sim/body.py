@@ -411,6 +411,57 @@ class SimBody:
         self._settle(0.3)
         return self.locate(container)
 
+    def stow(self, world: World, parcel: str, container: str) -> None:
+        """把手里的包装放进容器：对准容器顶上松手，看它是不是真的落在容器上。
+
+        末端执行器还没定（见方案文档），开盖、把东西倒进盒子、合盖这几下先简化成"落在容器上就算装进去"，
+        装好后包装从场景里收走。落偏了、掉下去了，就如实报告，台账不记。
+        """
+        p, c = world.home.containers[parcel], world.home.containers[container]
+        area = self._area(c.location)
+        self.caption = f"把{p.label or p.name}装进{c.name}"
+        if container not in self.info.containers or self.locate(container)[0] != c.location:
+            raise SkillFailed(f"{area.name}里没找到{c.name}，台账可能过期（仿真：容器不在那里），包装还拿在手里")
+        actual = self._container_pos(container)  # 按容器实际在哪对准，不按台账的槽位
+        x, y, z = self._to_local(area, actual)
+        bottom = z - c.size_m[2] / 2
+        hand_z = bottom + c.size_m[2] + p.size_m[2] + HAND_ABOVE_TOP + RELEASE_GAP
+        pre, at = self._approach_points(area, (x, y, bottom), hand_z)
+        self._check_reach(at, f"{area.name}里的{c.name}")
+        self._move_hand(pre, 0.6)
+        self._move_hand(at, 0.6)
+        self._release()
+        self._settle(0.5)
+        landed = self._container_pos(parcel)
+        rel = self.data.xmat[self._body_id(f"c_{container}")].reshape(3, 3).T @ (landed - self._container_pos(container))
+        on_top = (
+            abs(rel[0]) <= c.size_m[0] / 2 + 0.02
+            and abs(rel[1]) <= c.size_m[1] / 2 + 0.02
+            and rel[2] >= c.size_m[2] / 2 - 0.01
+        )
+        self._move_hand(self._hand() + np.array([0, 0, 0.02]), 0.2)
+        self._move_hand(pre, 0.4)
+        self._move_hand(self._rest_hand(), 0.6)
+        if not on_top:
+            self._settle(0.5)
+            location, slot = self.locate(parcel)
+            p.location, p.slot = location, slot
+            world.robot.holding = None
+            where = "掉在地上" if location == FLOOR else f"落在 {location} 槽位 {slot}"
+            raise SkillFailed(f"{p.name}没放进{c.name}（仿真：{where}）")
+        self._absorb(parcel)
+        self._settle(0.3)
+
+    def _absorb(self, parcel: str) -> None:
+        """装好了：包装从场景里收走（不再碰撞、看不见、不受重力），之后也不再算作场景里的容器。"""
+        g = self.model.geom(f"g_{parcel}").id
+        self._set_collision(parcel, False)
+        self.model.geom_rgba[g][3] = 0.0
+        self.model.body_gravcomp[self._body_id(f"c_{parcel}")] = 1.0
+        j = self.model.joint(f"fj_{parcel}")
+        self.data.qvel[j.dofadr[0] : j.dofadr[0] + 6] = 0
+        self.info.containers.remove(parcel)
+
     def inspect(self, world: World, location: str) -> Photo:
         area = self._area(location)
         self.caption = f"拍{area.name}"

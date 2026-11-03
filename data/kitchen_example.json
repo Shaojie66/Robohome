@@ -10,7 +10,8 @@
         "counter_front": {"position": [2.4, 0.5, 0.0], "yaw_deg": 90},
         "stove_front": {"position": [3.4, 0.5, 0.0], "yaw_deg": 90},
         "sink_front": {"position": [4.6, 0.35, 0.0], "yaw_deg": 90},
-        "table_front": {"position": [2.6, -0.45, 0.0], "yaw_deg": 270}
+        "table_front": {"position": [2.6, -0.45, 0.0], "yaw_deg": 270},
+        "intake_front": {"position": [0.6, -0.45, 0.0], "yaw_deg": 270}
       },
       "forbidden_waypoints": ["stove_front"]
     }
@@ -29,6 +30,16 @@
       "kind": "surface",
       "waypoint": "table_front",
       "geometry": {"position": [2.6, -1.2, 0.75], "size_m": [1.2, 0.8, 0.4], "yaw_deg": 180, "layout": [2, 2, 1]}
+    },
+    {
+      "id": "intake_counter",
+      "name": "入库台",
+      "room": "kitchen",
+      "slots": 6,
+      "temperature": "ambient",
+      "kind": "intake",
+      "waypoint": "intake_front",
+      "geometry": {"position": [0.6, -1.1, 0.85], "size_m": [0.9, 0.5, 0.4], "yaw_deg": 180, "layout": [3, 2, 1]}
     }
   ],
   "fixtures": [

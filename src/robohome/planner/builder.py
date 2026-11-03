@@ -7,7 +7,8 @@
 - 离开一个点位前，关上在这里打开的门；后面用不到的门当场就关（冷冻门和冷藏门不会一起开着）
 - 放东西只放空槽位：指定的槽位被占了就换同一处的空槽位
 - 启动带危险的家电前，先关好它的门；手里还拿着东西就先放回取出的地方
-- 第一次从台面（餐桌）取东西前先拍照确认（方案文档："查台账，到点后视觉确认"）
+- 第一次从台面（餐桌、入库台）取东西前先拍照确认（方案文档："查台账，到点后视觉确认"）
+- 装盒（stow）：拿着包装走到容器跟前，有门就打开，装进去
 - 计划结束时，打开过的门全部关好
 
 规则规划器用它写计划，大模型规划器用 normalize() 把模型给的计划补全。
@@ -102,7 +103,7 @@ class Builder:
         location, slot = self.where[container]
         self.access(location)
         area = self.home.storage.get(location)
-        if area and area.kind == "surface" and location not in self.inspected:
+        if area and area.kind in ("surface", "intake") and location not in self.inspected:
             self.inspect(location)  # 台面上的东西是人随手放的，先拍照确认
         self.steps.append(Step("pick", {"container": container}))
         self.origin.setdefault(container, (location, slot))
@@ -126,6 +127,20 @@ class Builder:
         self.place(container, location, free)
         self.close_area(location)
         return True
+
+    def stow(self, parcel: str, container: str, item) -> None:
+        """把手里的包装装进容器。item 是识别出来的物品（intake.core.NewItem）。"""
+        location, _ = self.where[container]
+        self.access(location)
+        self.steps.append(Step("stow", {
+            "parcel": parcel, "container": container, "name": item.name, "category": item.category,
+            "temperature": item.temperature, "volume_l": item.volume_l, "aliases": list(item.aliases),
+        }))
+        del self.where[parcel]
+        self.holding = None
+
+    def notify(self, message: str) -> None:
+        self.steps.append(Step("notify", {"message": message}))
 
     def inspect(self, location: str) -> None:
         self.access(location)

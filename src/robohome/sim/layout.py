@@ -79,7 +79,7 @@ def areas(home: Home) -> dict[str, Area]:
         if s.geometry is None:
             continue
         fixture = home.fixture_enclosing(s.id)
-        out[s.id] = Area(s.id, s.name, s.geometry, s.slots, s.waypoint, fixture, _style(fixture, s.kind == "surface"))
+        out[s.id] = Area(s.id, s.name, s.geometry, s.slots, s.waypoint, fixture, _style(fixture, s.kind in ("surface", "intake")))
     for a in home.appliances.values():
         if a.geometry is None:
             continue
