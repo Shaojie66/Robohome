@@ -126,7 +126,7 @@ def test_local_planner_replans_with_text_history(world):
     assert len(steps) == len(GOOD_PLAN)
     msgs = server.requests[1]["body"]["messages"]
     assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
-    assert isinstance(msgs[2]["content"], str) and "fridge_front" in msgs[2]["content"]
+    assert isinstance(msgs[2]["content"], str) and "freezer_front" in msgs[2]["content"]
     assert "冷冻室门没开" in msgs[3]["content"]
 
 

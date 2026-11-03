@@ -20,14 +20,67 @@ RELEASE_GAP = 0.01  # 放下时容器离底面这么高再松手
 
 @dataclass(frozen=True)
 class Reach:
-    """机器人手能够到的范围。硬件还没定，先按常见人形机器人估一个，可以按实际机型改。"""
+    """机器人手能够到的范围：每个高度上，手离底盘中心（两脚中间）水平最远多少米。
 
-    horizontal_m: float = 1.1  # 手离底盘中心的水平距离
-    min_z: float = 0.05  # 最低能够到的高度（蹲下）
-    max_z: float = 1.95  # 最高能够到的高度
+    profile 是 (高度, 最远水平距离) 的表，高度从低到高，中间按直线插值；比表里最低的低、最高的高都够不着。
+    """
+
+    name: str
+    profile: tuple[tuple[float, float], ...]
+    source: str = ""
+
+    @property
+    def min_z(self) -> float:
+        return self.profile[0][0]
+
+    @property
+    def max_z(self) -> float:
+        return self.profile[-1][0]
+
+    def max_horizontal(self, z: float) -> float:
+        """这个高度上手最远能伸到离底盘中心多远；够不着这个高度时返回 0。"""
+        pts = self.profile
+        if not pts[0][0] - 1e-9 <= z <= pts[-1][0] + 1e-9:
+            return 0.0
+        for (z0, r0), (z1, r1) in zip(pts, pts[1:]):
+            if z <= z1:
+                return r0 if z1 == z0 else r0 + (r1 - r0) * (z - z0) / (z1 - z0)
+        return pts[-1][1]
+
+    def reaches(self, horizontal: float, z: float) -> bool:
+        return horizontal <= self.max_horizontal(z) + 1e-6
+
+    def limit_text(self, z: float) -> str:
+        r = self.max_horizontal(z)
+        who = self.name + (" " if self.name[-1].isascii() else "")
+        if r <= 0:
+            return f"{who}的手能伸到的高度是 {self.min_z:g} 到 {self.max_z:g} 米"
+        return f"{who}在这个高度手最远伸到水平 {r:.2f} 米"
+
+    @classmethod
+    def box(cls, horizontal_m: float, min_z: float, max_z: float, name: str = "机器人") -> Reach:
+        """各个高度一样远的简单范围（之前的估算就是这样）。"""
+        return cls(name, ((min_z, horizontal_m), (max_z, horizontal_m)))
 
 
-DEFAULT_REACH = Reach()
+# 宇树 G1（29 自由度）：用 MuJoCo Menagerie 里的公开模型（unitree_g1/g1.xml）算出来，重算见 scripts/g1_reach.py。
+# 姿态限制：两脚踩平不动，蹲、弯腰、转腰、伸手都在关节限位内，上身前倾不超过 0.5 弧度，
+# 手里拿 1 公斤东西时重心仍落在两脚之间（留 2 厘米余量）；手的位置取掌心。
+# 每个高度取算出来的最远距离再减 5 厘米，留给手腕朝向和关节别顶死。没算全身动态平衡。
+G1_REACH = Reach(
+    "宇树 G1",
+    (
+        (0.05, 0.51), (0.15, 0.59), (0.25, 0.64), (0.35, 0.67), (0.45, 0.68), (0.55, 0.70), (0.65, 0.71),
+        (0.75, 0.73), (0.85, 0.74), (0.95, 0.74), (1.05, 0.72), (1.15, 0.69), (1.25, 0.64), (1.35, 0.57),
+        (1.45, 0.47), (1.55, 0.28),
+    ),
+    source="MuJoCo Menagerie unitree_g1（由宇树公开的 g1_29dof_rev_1_0 模型整理），scripts/g1_reach.py",
+)
+
+# 第一阶段的估算：常见人形机器人，水平 1.1 米、高 0.05 到 1.95 米。比 G1 宽松得多，留着做对比
+GENERIC_REACH = Reach.box(1.1, 0.05, 1.95, name="估算的人形机器人")
+
+DEFAULT_REACH = G1_REACH
 
 
 @dataclass(frozen=True)
@@ -124,6 +177,53 @@ def hinge_side(area: Area) -> str:
     return "left" if to_local(area, f.handle_pose.position)[0] >= 0 else "right"
 
 
+@dataclass(frozen=True)
+class Decor:
+    """规范里没有、为了像个厨房补上的东西（柜子背后的墙、放小家电的台面）。x、y 是地上的范围，z 是顶面高度。"""
+
+    name: str
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+    top: float
+
+
+def decor(found: dict[str, Area]) -> list[Decor]:
+    """柜子背后补一面墙；底面离地 0.3 到 1.2 米、下面又没有别的柜子的（微波炉、空气炸锅），给它们垫一个台面。
+
+    只按柜子朝 -y 摆、靠着同一面墙的厨房来补。仿真画面和地面地图都用它。
+    """
+    boxes = []
+    for a in found.values():
+        if a.style == "surface":
+            continue
+        w, d, _ = a.geometry.size_m
+        corners = [to_world(a, (sx * (w / 2 + WALL), sy * (d / 2 + WALL), 0)) for sx in (-1, 1) for sy in (-1, 1)]
+        boxes.append((a, min(c[0] for c in corners), max(c[0] for c in corners), min(c[1] for c in corners), max(c[1] for c in corners)))
+    if not boxes:
+        return []
+    back = max(b[4] for b in boxes) + 0.03
+    out = [Decor("墙", min(b[1] for b in boxes) - 0.3, max(b[2] for b in boxes) + 0.3, back, back + 0.04, 2.3)]
+    supported = []
+    for a, ax0, ax1, ay0, ay1 in boxes:
+        bottom = a.geometry.position[2] - WALL
+        below = any(
+            o is not a and o.geometry.position[2] < bottom and ox0 < ax1 and ax0 < ox1 and oy0 < ay1 and ay0 < oy1
+            for o, ox0, ox1, oy0, oy1 in boxes
+        )
+        if 0.3 <= bottom <= 1.2 and not below:
+            supported.append((bottom, ax0, ax1, ay0, ay1))
+    if supported:
+        out.append(Decor(
+            "台面",
+            min(b[1] for b in supported) - 0.1, max(b[2] for b in supported) + 0.1,
+            min(b[3] for b in supported) - 0.05, back,
+            min(b[0] for b in supported),
+        ))
+    return out
+
+
 # ---------- 建家时的几何检查 ----------
 
 
@@ -139,6 +239,7 @@ def check_geometry(home: Home, reach: Reach = DEFAULT_REACH) -> list[str]:
     problems: list[str] = []
     found = areas(home)
     room_waypoints = {wp: pose for r in home.rooms.values() for wp, pose in r.waypoints.items()}
+    forbidden = {wp for r in home.rooms.values() for wp in r.forbidden_waypoints}
 
     used = {c.location for c in home.containers.values()} | {c.home for c in home.containers.values() if c.home}
     for loc in sorted(used - set(found)):
@@ -157,19 +258,25 @@ def check_geometry(home: Home, reach: Reach = DEFAULT_REACH) -> list[str]:
         if stand is None:
             problems.append(f"{area.name}：不知道机器人站在哪里操作（门的点位或 waypoint）")
             continue
+        if stand in forbidden:
+            continue  # 机器人不去禁区（例如灶台前），那里的东西本来就不归它
         drawer_offset = area.drawer_travel if area.style == "drawer" else 0.0
         for slot in range(area.slots):
             x, y, z = area.slot_local(slot)
             target = to_world(area, (x, y - drawer_offset, z + lift))
             dist = _horizontal(target, room_waypoints[stand].position)
-            if dist > reach.horizontal_m or not reach.min_z <= target[2] <= reach.max_z:
+            if not reach.reaches(dist, target[2]):
                 problems.append(
                     f"{area.name}槽位 {slot}：取放时手要伸到离点位 {stand} 水平 {dist:.2f} 米、高 {target[2]:.2f} 米，手够不着"
-                    f"（范围是水平 {reach.horizontal_m} 米以内、高 {reach.min_z} 到 {reach.max_z} 米）"
+                    f"（{reach.limit_text(target[2])}）"
                 )
                 break  # 一个存放区只报第一个够不着的槽位
         if area.fixture is not None:
             problems += _check_handle(area, room_waypoints, reach)
+
+    from .floor import check_floor  # floor 用到这里的 areas，放在函数里引入免得互相引用
+
+    problems += check_floor(home)
 
     cw_cache = {a.id: a.cell for a in found.values()}
     for c in home.containers.values():
@@ -202,8 +309,37 @@ def _check_handle(area: Area, waypoints: dict, reach: Reach) -> list[str]:
     front = -d / 2 - WALL
     if abs(hy - front) > 0.1 or abs(hx) > w / 2 + WALL + 0.05 or not -WALL - 0.05 <= hz <= h + WALL + 0.05:
         out.append(f"{f.name}的把手（{f.handle_pose.position}）不在{area.name}的正面上，检查把手坐标或存放区尺寸")
-    pos = f.handle_pose.position
-    dist = _horizontal(pos, waypoints[f.waypoint].position)
-    if dist > reach.horizontal_m or not reach.min_z <= pos[2] <= reach.max_z:
-        out.append(f"{f.name}的把手离点位 {f.waypoint} 水平 {dist:.2f} 米、高 {pos[2]:.2f} 米，手够不着")
+    for what, pos in (("", f.handle_pose.position), ("开到底时", handle_when_open(area))):
+        dist = _horizontal(pos, waypoints[f.waypoint].position)
+        if not reach.reaches(dist, pos[2]):
+            out.append(
+                f"{f.name}的把手{what}离点位 {f.waypoint} 水平 {dist:.2f} 米、高 {pos[2]:.2f} 米，手够不着（{reach.limit_text(pos[2])}）"
+            )
+            break
     return out
+
+
+DOOR_OPEN_RAD = {"left": 1.75, "right": 1.75, "bottom": 1.5}  # 侧开门开 100 度，下翻门放平
+
+
+def handle_when_open(area: Area) -> tuple[float, float, float]:
+    """门或抽屉完全打开时把手在哪（世界坐标）。拉门的手一路跟着把手走，开到底时离机器人最远。"""
+    f = area.fixture
+    hx, hy, hz = to_local(area, f.handle_pose.position)
+    w, d, h = area.geometry.size_m
+    t = WALL
+    side = hinge_side(area)
+    if side == "none":
+        return to_world(area, (hx, hy - area.drawer_travel, hz))
+    front_y = -d / 2 - t - DOOR_GAP - t / 2
+    angle = DOOR_OPEN_RAD[side]
+    if side == "bottom":  # 绕门底的横轴往外翻
+        ry, rz = hy - front_y, hz + t
+        c, s_ = math.cos(angle), math.sin(angle)
+        return to_world(area, (hx, front_y + c * ry - s_ * rz, -t + s_ * ry + c * rz))
+    W = w + 2 * t
+    ox = -W / 2 if side == "left" else W / 2
+    a = -angle if side == "left" else angle  # 往外开：左边门轴顺时针转，右边逆时针
+    rx, ry = hx - ox, hy - front_y
+    c, s_ = math.cos(a), math.sin(a)
+    return to_world(area, (ox + c * rx - s_ * ry, front_y + s_ * rx + c * ry, hz))

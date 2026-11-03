@@ -123,7 +123,7 @@ def test_failure_reports_door_it_could_not_close(world):
 
 def test_plan_that_leaves_door_open_fails_and_is_cleaned_up(world):
     s = Scheduler(world, FixedPlanner(steps([
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
         {"skill": "open", "args": {"fixture": "freezer_door"}},
     ])))
     s.submit("打开冷冻室")

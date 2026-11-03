@@ -51,6 +51,9 @@ def _camera(lookat, eye) -> mujoco.MjvCamera:
     return cam
 
 
+_OPEN: list[Recorder] = []  # 同一时间只留一个渲染器：OSMesa 下旧的不关就开新的，新的画面会上下颠倒
+
+
 class Recorder:
     """每隔一段仿真时间截一帧俯视全景，最后存成 GIF；拍照动作另存机器人视角的 PNG。"""
 
@@ -74,13 +77,24 @@ class Recorder:
             return None
         try:
             if self.renderer is None:
+                for other in _OPEN:  # 同一个进程里录好几次（mvp --record）时，先关掉上一次的
+                    other.close()
                 self.renderer = mujoco.Renderer(body.model, self.size[1], self.size[0])
+                _OPEN.append(self)
             self.renderer.update_scene(body.data, camera=cam)
             return self.renderer.render().copy()
         except Exception as e:  # noqa: BLE001 渲染环境千差万别，失败了就只跑物理
             log.warning("渲染不可用，只跑物理：%s", e)
             self.failed = True
             return None
+
+    def close(self) -> None:
+        """关掉渲染器（之后再拍会重新打开一个）。"""
+        if self.renderer is not None:
+            self.renderer.close()
+            self.renderer = None
+        if self in _OPEN:
+            _OPEN.remove(self)
 
     def overview(self, body) -> mujoco.MjvCamera:
         """斜上方看整个厨房，镜头跟着机器人左右平移一点。"""
@@ -118,7 +132,7 @@ class Recorder:
 
     def photo(self, body, name: str, look_at=None) -> str | None:
         """机器人头部相机拍一张（拍照技能和出问题时的现场照）。"""
-        head = np.array([body.base[0], body.base[1], 1.45]) + 0.1 * body._forward()
+        head = np.array([body.base[0], body.base[1], 1.2]) + 0.16 * body._forward()
         target = look_at if look_at is not None else head + body._forward() + np.array([0, 0, -0.6])
         vis = body.model.vis.global_
         overview_fovy, vis.fovy = vis.fovy, HEAD_FOVY

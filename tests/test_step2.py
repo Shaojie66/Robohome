@@ -19,7 +19,7 @@ from robohome.world import World
 SPEC = Path(__file__).resolve().parents[1] / "data" / "kitchen_example.json"
 
 GOOD_PLAN = [
-    {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+    {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
     {"skill": "open", "args": {"fixture": "freezer_door"}},
     {"skill": "pick", "args": {"container": "box_f1"}},
     {"skill": "close", "args": {"fixture": "freezer_door"}},
@@ -31,7 +31,7 @@ GOOD_PLAN = [
 ]
 # 忘了开门就去拿
 BAD_PLAN = [
-    {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+    {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
     {"skill": "pick", "args": {"container": "box_f1"}},
 ]
 
@@ -115,7 +115,7 @@ def test_llm_wrong_refusal_is_challenged_once(world):
 
 
 def test_llm_gives_up_after_max_attempts(world):
-    other = [{"skill": "navigate", "args": {"waypoint": "fridge_front"}}, {"skill": "pick", "args": {"container": "box_f2"}}]
+    other = [{"skill": "navigate", "args": {"waypoint": "freezer_front"}}, {"skill": "pick", "args": {"container": "box_f2"}}]
     client = FakeClient(plan(BAD_PLAN), plan(other))
     with pytest.raises(PlanningError, match="重试 2 次"):
         LLMPlanner(client=client, max_attempts=2, normalize_plans=False).plan("把牛肉拿出来解冻", world)
@@ -295,7 +295,7 @@ def test_leaving_with_door_open_is_blocked(world):
     report = simulate(world, [Step(**s) for s in PLAN_DOOR_LEFT_OPEN])
     assert not report.ok
     assert report.results[-1].stage == "safety"
-    assert "离开 fridge_front 前要先关上冷冻室门" in report.summary
+    assert "离开 freezer_front 前要先关上冷冻室门" in report.summary
 
 
 def test_plan_must_end_with_doors_closed(world):

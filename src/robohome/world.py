@@ -58,6 +58,9 @@ class World:
     stuck_fixtures: set[str] = field(default_factory=set)
     slippery: set[str] = field(default_factory=set)
     unknown_objects: dict[str, list[str]] = field(default_factory=dict)
+    # 第二阶段：去这些点位的路被地上的东西挡住了；这些容器身上的标签被挡住了，相机认不出来
+    blocked_waypoints: set[str] = field(default_factory=set)
+    covered_tags: set[str] = field(default_factory=set)
     photos: list[Photo] = field(default_factory=list)  # 这次任务拍的照片
     notices: list[str] = field(default_factory=list)  # 执行中发现、需要告诉主人的事
     started_by_robot: set[str] = field(default_factory=set)  # 机器人自己启动、还在运行的家电

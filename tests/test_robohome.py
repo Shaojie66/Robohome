@@ -110,7 +110,7 @@ def test_queue_halts_after_failure(world):
 
 def test_precondition_blocks_pick_with_closed_door(world):
     s = Scheduler(world, RulePlanner())
-    report = s.execute("手写计划", [Step("navigate", {"waypoint": "fridge_front"}), Step("pick", {"container": "box_f1"})])
+    report = s.execute("手写计划", [Step("navigate", {"waypoint": "freezer_front"}), Step("pick", {"container": "box_f1"})])
     assert not report.ok
     assert report.results[-1].stage == "precondition"
     assert "冷冻室门没开" in report.results[-1].message

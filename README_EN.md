@@ -51,10 +51,11 @@ Everything below is reproducible from this repo:
 
 - **Five household tasks end to end**: check the fridge, move frozen beef to the chiller to thaw, air-fry popcorn chicken, unload the dishwasher, clear the table. Each run checks the resulting state of the home, not just whether it raised an error.
 - **Grocery intake, end to end**: put the shopping on the intake counter and say "bought a pound of pork belly, two tubs of yogurt and a bag of apples". The robot reads each label, works out what it is, and stows it into a standard container in the right temperature zone, recording where it went. Anything it can't read or fit stays on the counter and the owner is told why.
-- **26 fault cases all stop safely**: appliance offline, stuck door, dropped item, inventory out of sync with reality, and more. They pass with both the mock backend and the MuJoCo simulation.
+- **31 fault cases all stop safely**: appliance offline, stuck door, dropped item, inventory out of sync with reality, a blocked path, a covered container tag, and more. They pass with both the mock backend and the MuJoCo simulation.
 - **Local LLM first**: Ollama + `qwen3:8b` by default, no API key needed. On the author's Mac, each of the five household tasks and three grocery sentences passed 20 runs in a row, with the slowest single run around 2 minutes. Claude is supported as an alternative.
 - **Intake preview**: without letting the robot move, you can just see what it recognized and which containers it would use; the inventory changes only after you confirm.
 - **Simulation generated from the spec**: give storage areas and appliances their dimensions and you get cabinets, drawers and hinged doors. Doors have to be pulled open, and things can actually fall.
+- **Simulation sized to the Unitree G1**: hand reach is computed from Unitree's published G1 model (about 0.7 m horizontally at waist height, 1.55 m at most) and checked when the home is set up. The robot plans its walk around furniture for its body size, detours around anything new its lidar sees on the floor, and stops if there's no way through. Containers sit a few centimeters off; the robot finds them by reading the tag on each container with a hand camera.
 
 ## Quick start
 
@@ -143,7 +144,7 @@ The LLM only thinks; it never acts directly. After a stop, the robot photographs
 | `planner/` | One sentence → sequence of skill calls | Rule-based planner (offline) + LLM planner; intake goes to `planner/intake.py` |
 | `intake/` | Recognize new items → assign containers → update inventory | Keyword recognizer (offline) + LLM recognizer (text, photo, or labels on the intake counter) |
 | `llm/` | Local models (Ollama etc.) or Claude behind the same interface | Working |
-| `sim/` | Generate the MuJoCo scene from the spec, record video and photos | All eight tasks and 26 faults pass in simulation |
+| `sim/` | Generate the MuJoCo scene from the spec; floor routing, lidar, tag reading; record video and photos | With containers placed slightly off, all eight tasks and 31 faults pass in simulation |
 
 ## Safety boundaries
 
@@ -159,7 +160,7 @@ Full rules: [safety principles](./docs/how-it-works.md#安全原则) (Chinese).
 
 These need replacing or validating before moving to a real robot:
 
-- The robot is kinematic: it follows trajectories, ignores joint torques and doesn't collide with furniture. Reach is estimated from a typical humanoid.
+- The robot is kinematic: it follows trajectories and ignores joint torques; no whole-body balance or dexterous hands. Reach is computed statically from the G1 model, walking avoids furniture via a floor map, and the area a door sweeps while opening isn't checked.
 - Grasping is simplified to a "magnetic" attach; no gripper simulation. Stowing (open the lid, put it in, close it) is simplified to "the package lands on the container".
 - Appliance internals (heating, timers) are simulated, not yet connected to Home Assistant or Mi Home.
 - The rule-based planner only knows fixed phrasings of the five tasks plus intake; free-form instructions need an LLM.
@@ -175,7 +176,7 @@ These need replacing or validating before moving to a real robot:
 Phase 2:
 
 1. Grocery intake loop: the robot stows new items into the right zone itself and records where they went ✓
-2. More realistic simulation: walk around furniture, find containers by their labels when they're slightly off, check reach against Unitree G1's published specs
+2. More realistic simulation: walk around furniture, find containers by their tags when they're slightly off, check reach against Unitree G1's published model ✓
 3. Phone entry point + home server: run the service on a computer at home, send instructions and get reports from a phone browser, LAN only
 4. Open-source release
 
