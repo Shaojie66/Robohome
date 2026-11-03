@@ -8,6 +8,11 @@
 - 开始出字后，超过 idle_timeout 秒一个字都没有就判定卡住；
 - 卡住、连接中途断开、流没正常结束，都重试 retries 次；整次请求超过 total_timeout 秒直接报错，不重试。
 （在 Mac 上实测时遇到过 Ollama 连接挂住不出字，非流式要等满整个超时才发现。）
+
+会思考的模型（qwen3 等）先在 reasoning 字段里想，再出正式答案。思考陷进同一段话里打转时，
+字一直在出、不会触发 idle_timeout：Mac 上 qwen3:8b 认入库标签时，为"苹果归哪个类别"反复念同一句话，
+5 分钟一个正式字都没出。所以思考里同一段话出现 LOOP_REPEATS 次、或者思考超过 max_reasoning_chars 字，
+就直接报错（温度是 0，重试也只会一模一样地再转一遍，不重试）。
 只用标准库，不需要额外依赖。
 
     ollama pull qwen3:8b
@@ -29,6 +34,8 @@ from .base import LLMError, clean_json_text
 
 DEFAULT_BASE_URL = os.environ.get("ROBOHOME_LLM_BASE_URL", "http://localhost:11434/v1")
 DEFAULT_MODEL = os.environ.get("ROBOHOME_LLM_MODEL", "qwen3:8b")
+LOOP_TAIL = 80  # 思考最后这么多字
+LOOP_REPEATS = 3  # 在思考里出现了这么多次，就算在打转
 
 
 class LocalJSON:
@@ -44,6 +51,7 @@ class LocalJSON:
         api_key: str | None = None,
         temperature: float = 0.0,
         first_byte_timeout: float | None = None,
+        max_reasoning_chars: int = 12000,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -54,6 +62,7 @@ class LocalJSON:
         self.retries = max(0, int(retries))  # 卡住或断开后重试几次
         self.api_key = api_key or os.environ.get("ROBOHOME_LLM_API_KEY")
         self.temperature = temperature
+        self.max_reasoning_chars = max_reasoning_chars  # 思考最多这么多字，超过就当陷进去了
         self._vision: dict[str, bool | None] = {}
 
     def user_message(self, text: str, image_path: str | None = None) -> dict:
@@ -154,6 +163,8 @@ class LocalJSON:
         conn, target = self._connect(self.base_url + path, self.first_byte_timeout)
         sock = conn.sock  # 先拿住：收到第一个字后把读超时从 first_byte_timeout 换成 idle_timeout
         parts: list[str] = []
+        reasoning: list[str] = []
+        thought, checked = 0, 0
         finish_reason = None
         done = False
         waiting = f"{self.first_byte_timeout:g} 秒没有响应（模型可能还在加载）"
@@ -192,7 +203,15 @@ class LocalJSON:
                 if not choices:  # 有的服务会单独发一条只带 usage 的数据
                     continue
                 choice = choices[0] if isinstance(choices[0], dict) else {}
-                parts.append((choice.get("delta") or {}).get("content") or "")
+                delta = choice.get("delta") or {}
+                parts.append(delta.get("content") or "")
+                piece = delta.get("reasoning") or delta.get("reasoning_content") or ""
+                if piece:
+                    reasoning.append(piece)
+                    thought += len(piece)
+                    if thought - checked >= 200:  # 每多想 200 字查一次，免得每个字都去数
+                        checked = thought
+                        _check_reasoning("".join(reasoning), self.max_reasoning_chars)
                 finish_reason = choice.get("finish_reason") or finish_reason
         except TimeoutError as e:
             raise _Retryable(waiting) from e
@@ -205,6 +224,15 @@ class LocalJSON:
         if not done and finish_reason is None:
             raise _Retryable("输出没有正常结束就断开了")
         return "".join(parts), finish_reason
+
+
+def _check_reasoning(text: str, limit: int) -> None:
+    """思考在打转就报错：最后一段话已经出现过好几次，或者想得太长。"""
+    tail = text[-LOOP_TAIL:]
+    if len(text) >= LOOP_TAIL * LOOP_REPEATS and text.count(tail) >= LOOP_REPEATS:
+        raise LLMError(f"本地模型思考陷入重复，放弃这次请求（反复出现：{tail[-30:]}）")
+    if len(text) > limit:
+        raise LLMError(f"本地模型思考超过 {limit} 字还没给出答案，放弃这次请求")
 
 
 class _Retryable(Exception):

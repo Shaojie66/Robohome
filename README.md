@@ -33,7 +33,7 @@ robohome run "..." --planner local --model qwen3:14b --base-url http://192.168.1
 
 任何兼容 OpenAI Chat Completions 接口的本地服务都能用（llama.cpp server、vLLM、LM Studio），用 `--base-url` 指过去即可；也可以设环境变量 `ROBOHOME_LLM_BASE_URL`、`ROBOHOME_LLM_MODEL`。
 
-本地模型用流式返回：第一个字之前最多等 3 分钟（冷启动要先把模型读进内存），开始出字后 60 秒没有新输出就判定卡住；卡住或连接中途断开会自动重试一次，整次请求超过 5 分钟直接报错。
+本地模型用流式返回：第一个字之前最多等 3 分钟（冷启动要先把模型读进内存），开始出字后 60 秒没有新输出就判定卡住；卡住或连接中途断开会自动重试一次，整次请求超过 5 分钟直接报错。会思考的模型（qwen3）思考时反复念同一段话、或者想了 12000 字还没给答案，也直接报错，不白等（Mac 上实测过 qwen3:8b 为"苹果归哪个类别"打转 5 分钟）。
 
 用 Claude 规划和识别（需要 `pip install -e ".[claude]"` 和 `ANTHROPIC_API_KEY`）：
 

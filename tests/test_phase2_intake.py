@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -492,3 +493,67 @@ def test_llm_category_variants_still_share_a_container(world):
     planner = IntakePlanner(LLMRecognizer(backend))
     planner.plan("入库", world)
     assert planner.decisions[0].container == "box_f2" and planner.decisions[0].item.category == "速冻"
+
+
+# ---------- 本地模型思考打转 ----------
+
+
+def _sse(obj):
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
+
+
+def _reasoning_server(thoughts, content='{"parcels": []}'):
+    from test_local_llm import StubServer
+
+    def script(handler, n):
+        try:
+            for t in thoughts:
+                handler.wfile.write(_sse({"choices": [{"delta": {"content": "", "reasoning": t}, "finish_reason": None}]}))
+            handler.wfile.write(_sse({"choices": [{"delta": {"content": content}, "finish_reason": "stop"}]}))
+            handler.wfile.write(b"data: [DONE]\n\n")
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # 客户端发现打转后提前断开
+
+    return StubServer([], script=script)
+
+
+def test_local_backend_gives_up_when_thinking_loops():
+    """Mac 上 qwen3:8b 实测：为"苹果归哪个类别"反复念同一句话，5 分钟没出正式答案。"""
+    from robohome.llm import LLMError, LocalJSON
+
+    loop = "最终，可能将苹果归入“生鲜”类别，但用户提供的类别中没有，所以可能需要归入“其他”。"
+    server = _reasoning_server(["先看五花肉，应该冷冻。" * 3] + [loop] * 200)
+    try:
+        backend = LocalJSON(base_url=server.url, retries=1)
+        started = time.monotonic()
+        with pytest.raises(LLMError, match="思考陷入重复"):
+            backend.complete_json("s", [backend.user_message("u")], {"type": "object"}, "x")
+        assert time.monotonic() - started < 5
+        assert len(server.requests) == 1  # 温度是 0，重试也一样，不重试
+    finally:
+        server.close()
+
+
+def test_local_backend_accepts_normal_thinking():
+    from robohome.llm import LocalJSON
+
+    thoughts = [f"第 {n} 件：看标签，判断温区和体积。" for n in range(1, 60)]
+    server = _reasoning_server(thoughts, '{"ok": true}')
+    try:
+        data, _ = LocalJSON(base_url=server.url).complete_json("s", [{"role": "user", "content": "u"}], {"type": "object"}, "x")
+        assert data == {"ok": True}
+    finally:
+        server.close()
+
+
+def test_local_backend_caps_very_long_thinking():
+    from robohome.llm import LLMError, LocalJSON
+
+    thoughts = [f"想法 {n}：{'这件东西可能是什么' * 3}{n * 7919}" for n in range(2000)]
+    server = _reasoning_server(thoughts)
+    try:
+        with pytest.raises(LLMError, match="思考超过 3000 字"):
+            LocalJSON(base_url=server.url, max_reasoning_chars=3000).complete_json(
+                "s", [{"role": "user", "content": "u"}], {"type": "object"}, "x")
+    finally:
+        server.close()
