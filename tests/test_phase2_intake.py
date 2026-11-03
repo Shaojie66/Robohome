@@ -185,14 +185,26 @@ def test_llm_labels_bad_structure_is_an_error():
 # ---------- 入库规划 ----------
 
 
-@pytest.mark.parametrize("text", ["今天买了牛奶", "帮我入库", "刚从超市回来", "新买的鸡蛋"])
+@pytest.mark.parametrize("text", [
+    "今天买了牛奶", "帮我入库", "刚从超市回来", "新买的鸡蛋", "这些是今天买的，收一下", "买了炸鸡和炸酱",
+    "把买回来的东西放进冰箱",
+])
 def test_intake_phrases(text):
     assert is_intake(text)
 
 
-@pytest.mark.parametrize("text", [t.instruction for t in TASKS if not t.parcels])
+@pytest.mark.parametrize("text", [t.instruction for t in TASKS if not t.parcels] + [
+    "把昨天买的牛肉拿出来解冻", "把新买的鸡米花放进空气炸锅并启动", "看看今天买的牛奶还在不在",
+])
 def test_other_tasks_are_not_intake(text):
     assert not is_intake(text)
+
+
+def test_task_mentioning_a_purchase_is_not_routed_to_intake(world):
+    """"买的"只是修饰语时照常做原来的任务，不去找入库台。"""
+    report = run(world, RulePlanner(), "把昨天买的牛肉拿出来解冻")
+    assert report.ok, report.render()
+    assert world.appliances["microwave"].status()["running"]
 
 
 def test_intake_plan_inspects_then_stows_each_parcel(world):
@@ -429,6 +441,17 @@ def test_cli_run_routes_intake(tmp_path, capsys):
 
 
 # ---------- 仿真 ----------
+
+
+def test_stow_fails_when_container_is_not_there(world):
+    """不开仿真时也一样：容器不在就停下，不记账，包装还在手里。"""
+    put_parcels(world, ["一斤五花肉"])
+    apply_fault(world, "missing:box_f1")
+    report = run(world, RulePlanner(), "今天买了一斤五花肉")
+    assert not report.ok and "没找到冷冻盒 1 号" in report.summary
+    assert world.robot.holding == "parcel_1" and world.home.find_item("五花肉") is None
+    assert "parcel_1" in world.home.containers
+    assert any("手里还拿着包装 1 号" in n for n in report.needs_attention)
 
 
 def test_stow_in_simulation_absorbs_the_parcel(world):

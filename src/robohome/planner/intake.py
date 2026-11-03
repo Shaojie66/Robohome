@@ -30,12 +30,18 @@ from ..world import World
 from .base import PlanningError, Step
 from .builder import Builder
 
-INTAKE_WORDS = ("入库", "买了", "买回", "买的", "新买", "超市回来", "采购")
+BUY_WORDS = ("买了", "买回", "买的", "新买", "超市回来", "采购")
+# 提到买，但要做的是别的事，比如"把昨天买的牛肉拿出来解冻"
+OTHER_TASK_WORDS = (
+    "拿出", "取出", "解冻", "空气炸锅", "炸一下", "加热", "热一下", "启动", "洗碗机", "原位", "归位", "看看", "查看",
+)
 
 
 def is_intake(instruction: str) -> bool:
     """这句话是不是让机器人把买回来的东西收起来。"""
-    return any(w in instruction for w in INTAKE_WORDS)
+    if "入库" in instruction:
+        return True
+    return any(w in instruction for w in BUY_WORDS) and not any(w in instruction for w in OTHER_TASK_WORDS)
 
 
 class LabelRecognizer(Protocol):

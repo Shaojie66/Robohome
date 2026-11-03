@@ -277,6 +277,8 @@ def _run_stow(
     p, c = home.containers[parcel], home.containers[container]
     if world.body is not None:
         world.body.stow(world, parcel, container)  # 没放进去会抛 SkillFailed，并把包装记到它实际落下的地方
+    if container in world.missing_containers:  # 和 pick 一样：到了才发现容器不在，包装还在手里
+        raise SkillFailed(f"到了 {c.location} 槽位 {c.slot} 没找到{c.name}，台账可能过期")
     # 装好了才记账：包装没了，容器里多了一件东西
     record_item(world, NewItem(name, category, temperature, float(volume_l), list(aliases or [])), container, float(volume_l))  # type: ignore[arg-type]
     del home.containers[parcel]
