@@ -12,7 +12,8 @@
 会思考的模型（qwen3 等）先在 reasoning 字段里想，再出正式答案。思考陷进同一段话里打转时，
 字一直在出、不会触发 idle_timeout：Mac 上 qwen3:8b 认入库标签时，为"苹果归哪个类别"反复念同一句话，
 5 分钟一个正式字都没出。所以思考里同一段话出现 LOOP_REPEATS 次、或者思考超过 max_reasoning_chars 字，
-就直接报错（温度是 0，重试也只会一模一样地再转一遍，不重试）。
+就断开。温度是 0 时同样的请求只会一模一样地再转一遍，所以打转后把温度升到 LOOP_RETRY_TEMPERATURE
+再试一次，换条思路；还转就报错。想得太长不重试（已经等了很久）。
 只用标准库，不需要额外依赖。
 
     ollama pull qwen3:8b
@@ -36,6 +37,7 @@ DEFAULT_BASE_URL = os.environ.get("ROBOHOME_LLM_BASE_URL", "http://localhost:114
 DEFAULT_MODEL = os.environ.get("ROBOHOME_LLM_MODEL", "qwen3:8b")
 LOOP_TAIL = 80  # 思考最后这么多字
 LOOP_REPEATS = 3  # 在思考里出现了这么多次，就算在打转
+LOOP_RETRY_TEMPERATURE = 0.6  # 打转后用这个温度再试一次
 
 
 class LocalJSON:
@@ -106,15 +108,15 @@ class LocalJSON:
                 "json_schema": {"name": schema_name, "schema": schema, "strict": True},
             },
         }
-        text, finish_reason = "", None
-        for attempt in range(self.retries + 1):
-            try:
-                text, finish_reason = self._stream("/chat/completions", body)
-                break
-            except _Retryable as e:
-                if attempt == self.retries:
-                    tail = f"，已重试 {self.retries} 次" if self.retries else ""
-                    raise LLMError(f"本地模型{e}{tail}") from e
+        try:
+            text, finish_reason = self._request(body)
+        except _Looping as e:
+            if self.temperature >= LOOP_RETRY_TEMPERATURE:
+                raise
+            try:  # 温度 0 再问只会原样再转一遍，升温换条思路
+                text, finish_reason = self._request({**body, "temperature": LOOP_RETRY_TEMPERATURE})
+            except _Looping as again:
+                raise _Looping(f"{again}；升温重试一次还是打转") from e
         if finish_reason == "length":
             raise LLMError("输出被截断")
         try:
@@ -122,6 +124,17 @@ class LocalJSON:
         except json.JSONDecodeError as e:
             raise LLMError(f"返回的不是合法 JSON：{e}；原文开头：{text[:200]}") from e
         return data, {"role": "assistant", "content": text}
+
+    def _request(self, body: dict) -> tuple[str, str | None]:
+        """发一次请求；卡住或断开重试 retries 次。"""
+        for attempt in range(self.retries + 1):
+            try:
+                return self._stream("/chat/completions", body)
+            except _Retryable as e:
+                if attempt == self.retries:
+                    tail = f"，已重试 {self.retries} 次" if self.retries else ""
+                    raise LLMError(f"本地模型{e}{tail}") from e
+        raise AssertionError("unreachable")
 
     # ---- HTTP ----
 
@@ -230,9 +243,13 @@ def _check_reasoning(text: str, limit: int) -> None:
     """思考在打转就报错：最后一段话已经出现过好几次，或者想得太长。"""
     tail = text[-LOOP_TAIL:]
     if len(text) >= LOOP_TAIL * LOOP_REPEATS and text.count(tail) >= LOOP_REPEATS:
-        raise LLMError(f"本地模型思考陷入重复，放弃这次请求（反复出现：{tail[-30:]}）")
+        raise _Looping(f"本地模型思考陷入重复，放弃这次请求（反复出现：{tail[-30:]}）")
     if len(text) > limit:
         raise LLMError(f"本地模型思考超过 {limit} 字还没给出答案，放弃这次请求")
+
+
+class _Looping(LLMError):
+    """思考在打转。升温可能换条思路走出来。"""
 
 
 class _Retryable(Exception):

@@ -502,12 +502,13 @@ def _sse(obj):
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
 
 
-def _reasoning_server(thoughts, content='{"parcels": []}'):
+def _reasoning_server(thoughts, content='{"parcels": []}', later=None):
+    """later：第二次及以后的请求改想这些（模拟升温后换了思路）。"""
     from test_local_llm import StubServer
 
     def script(handler, n):
         try:
-            for t in thoughts:
+            for t in (thoughts if n == 1 or later is None else later):
                 handler.wfile.write(_sse({"choices": [{"delta": {"content": "", "reasoning": t}, "finish_reason": None}]}))
             handler.wfile.write(_sse({"choices": [{"delta": {"content": content}, "finish_reason": "stop"}]}))
             handler.wfile.write(b"data: [DONE]\n\n")
@@ -526,10 +527,38 @@ def test_local_backend_gives_up_when_thinking_loops():
     try:
         backend = LocalJSON(base_url=server.url, retries=1)
         started = time.monotonic()
-        with pytest.raises(LLMError, match="思考陷入重复"):
+        with pytest.raises(LLMError, match="思考陷入重复.*升温重试一次还是打转"):
             backend.complete_json("s", [backend.user_message("u")], {"type": "object"}, "x")
         assert time.monotonic() - started < 5
-        assert len(server.requests) == 1  # 温度是 0，重试也一样，不重试
+        assert [r["body"]["temperature"] for r in server.requests] == [0.0, 0.6]  # 只升温重试一次
+    finally:
+        server.close()
+
+
+def test_local_backend_retries_warmer_after_loop():
+    """温度 0 打转是确定的，原样再问还会转；升温重试一次，换条思路就能答出来。"""
+    from robohome.llm import LocalJSON
+
+    loop = "苹果可能归入“水果”，但已有类别里没有，所以再想想，可能归入“其他”。"
+    fresh = [f"第 {n} 件：看标签，判断温区和体积。" for n in range(1, 10)]
+    server = _reasoning_server([loop] * 200, '{"ok": true}', later=fresh)
+    try:
+        data, _ = LocalJSON(base_url=server.url).complete_json("s", [{"role": "user", "content": "u"}], {"type": "object"}, "x")
+        assert data == {"ok": True}
+        assert [r["body"]["temperature"] for r in server.requests] == [0.0, 0.6]
+    finally:
+        server.close()
+
+
+def test_local_backend_does_not_retry_loop_when_already_warm():
+    from robohome.llm import LLMError, LocalJSON
+
+    server = _reasoning_server(["反复想同一件事，还是没想明白该放哪。"] * 200)
+    try:
+        with pytest.raises(LLMError, match="思考陷入重复"):
+            LocalJSON(base_url=server.url, temperature=0.7).complete_json(
+                "s", [{"role": "user", "content": "u"}], {"type": "object"}, "x")
+        assert len(server.requests) == 1
     finally:
         server.close()
 
