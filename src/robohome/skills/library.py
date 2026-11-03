@@ -80,7 +80,9 @@ def _check_navigate(world: World, waypoint: str) -> str | None:
 
 def _run_navigate(world: World, waypoint: str) -> str:
     if world.body is not None:
-        world.body.navigate(world, waypoint)  # 半路滑落会抛 SkillFailed，并把容器记到地上
+        world.body.navigate(world, waypoint)  # 半路滑落会抛 SkillFailed，并把容器记到地上；路被挡住会退回来再抛
+    if waypoint in world.blocked_waypoints:
+        raise SkillFailed(f"去 {waypoint} 的路被挡住了，停在 {world.robot.waypoint}")
     held = world.robot.holding
     if held and held in world.slippery:
         # 搬运途中滑落：东西掉在原地，机器人停在原地，不再继续
@@ -154,6 +156,8 @@ def _run_pick(world: World, container: str) -> str:
     c = world.home.containers[container]
     if container in world.missing_containers:
         raise SkillFailed(f"到了 {c.location} 槽位 {c.slot} 没找到{c.name}，台账可能过期")
+    if container in world.covered_tags:
+        raise SkillFailed(f"看不清{c.name}上的标签（可能被挡住了），没有伸手")
     src = c.location
     c.location, c.slot = HELD, 0
     world.robot.holding = container
@@ -279,6 +283,8 @@ def _run_stow(
         world.body.stow(world, parcel, container)  # 没放进去会抛 SkillFailed，并把包装记到它实际落下的地方
     if container in world.missing_containers:  # 和 pick 一样：到了才发现容器不在，包装还在手里
         raise SkillFailed(f"到了 {c.location} 槽位 {c.slot} 没找到{c.name}，台账可能过期")
+    if container in world.covered_tags:
+        raise SkillFailed(f"看不清{c.name}上的标签（可能被挡住了），没有装，包装还拿在手里")
     # 装好了才记账：包装没了，容器里多了一件东西
     record_item(world, NewItem(name, category, temperature, float(volume_l), list(aliases or [])), container, float(volume_l))  # type: ignore[arg-type]
     del home.containers[parcel]

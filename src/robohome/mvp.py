@@ -34,9 +34,10 @@ Check = Callable[[World, Report], list[str]]
 
 FAULT_HELP = (
     "offline:<家电> / busy:<家电> / missing:<容器> / drop:<容器> / stuck:<部件> / unknown:<存放区> / unreadable:<包装>"
+    " / blocked:<点位> / covered:<容器>"
 )
 # 规划时看不见、只有动手时才会发现的故障。这类故障如果在规划阶段就停了，说明计划本身有问题，不算验证过
-HIDDEN_FAULTS = ("missing", "drop", "stuck")
+HIDDEN_FAULTS = ("missing", "drop", "stuck", "blocked", "covered")
 
 
 def apply_fault(world: World, fault: str) -> None:
@@ -63,6 +64,15 @@ def apply_fault(world: World, fault: str) -> None:
         if target not in home.storage and target not in home.appliances:
             raise ValueError(f"没有这个存放区：{target}")
         world.unknown_objects.setdefault(target, []).append("一个没登记的袋子")
+    elif kind == "blocked":  # 去这个点位的路被地上的东西挡住了（纸箱、宠物、没收的快递）
+        if not any(target in r.waypoints for r in home.rooms.values()):
+            raise ValueError(f"没有这个点位：{target}")
+        world.blocked_waypoints.add(target)
+    elif kind == "covered":  # 容器身上的标签被挡住了（盖了块布、贴了张便条），相机认不出来
+        c = home.containers.get(target)
+        if c is None or c.kind == "parcel":
+            raise ValueError(f"没有这个贴了标签的容器：{target}")
+        world.covered_tags.add(target)
     elif kind == "unreadable":  # 包装上的标签看不清（反光、被挡住、皱了）
         c = home.containers.get(target)
         if c is None or c.kind != "parcel":
@@ -194,6 +204,7 @@ TASKS: list[Task] = [
         ("missing:box_f1", "stop"),
         ("stuck:chiller_door", "stop"),
         ("stuck:freezer_door", "stop"),
+        ("covered:box_f1", "stop"),
     )),
     Task("air_fry", "把鸡米花放进空气炸锅并启动", _check_air_fry, (
         ("offline:air_fryer", "stop"),
@@ -201,23 +212,27 @@ TASKS: list[Task] = [
         ("drop:jar_f1", "stop"),
         ("stuck:air_fryer_basket", "stop"),
         ("missing:jar_f1", "stop"),
+        ("blocked:counter_front", "stop"),  # 拿着密封罐走到一半发现路被挡住
     )),
     Task("dishes", "把洗好的碗从洗碗机收到柜子", _check_dishes, (
         ("busy:dishwasher", "stop"),
         ("stuck:dish_cabinet_door", "stop"),
         ("missing:bowl_2", "stop"),
+        ("blocked:dish_front", "stop"),
     )),
     Task("tidy", "把桌上散落的常用物品收回原位", _check_tidy, (
         ("drop:cup_1", "stop"),
         ("stuck:dish_cabinet_door", "stop"),
         ("unknown:dining_table", "notice"),
+        ("covered:cup_1", "stop"),
     )),
     # 第二阶段第 1 周：入库闭环。苹果、鸡蛋、牛奶放冷藏或常温都合理。
     # 卡住的门选一定会用到的那扇（虾仁一定进冷冻、酸奶一定进冷藏），否则模型把鸡蛋放常温时故障根本碰不到
     _intake_task(
         "intake1", "今天买了一斤五花肉、两盒酸奶和一袋苹果",
         (("一斤五花肉", ("frozen",)), ("两盒酸奶", ("chilled",)), ("一袋苹果", ("chilled", "ambient"))),
-        (("unreadable:parcel_2", "notice"), ("drop:parcel_1", "stop"), ("stuck:freezer_door", "stop")),
+        (("unreadable:parcel_2", "notice"), ("drop:parcel_1", "stop"), ("stuck:freezer_door", "stop"),
+         ("blocked:intake_front", "stop")),
     ),
     _intake_task(
         "intake2", "买了虾仁、一盒鸡蛋、挂面和一袋饺子",

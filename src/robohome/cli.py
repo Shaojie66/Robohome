@@ -8,7 +8,7 @@
     robohome mvp                                         # MVP 五个任务各跑一次
     robohome mvp --faults                                # 每个任务注入故障，检查是否安全停下
     robohome mvp --planner local --repeat 20             # 用本地模型连跑 20 次，看成功率
-    robohome sim-check                                   # 检查规范文件的三维数据：容器放得进、手够得着
+    robohome sim-check                                   # 检查规范文件的三维数据：容器放得进、手够得着、点位走得到
     robohome mvp --sim                                   # 在 MuJoCo 物理仿真里跑五个任务
     robohome mvp --sim --faults --record out/            # 仿真里跑故障测试，每次录成 GIF
     robohome run "把牛肉拿出来解冻" --record out/          # 在仿真里跑一条指令并录像
@@ -161,7 +161,7 @@ def _sim_check(args) -> int:
     for p in problems:
         print(f"✗ {p}")
     if not problems:
-        print(f"✓ {home.name}：三维数据没问题，容器都放得进槽位，把手和槽位都够得着")
+        print(f"✓ {home.name}：三维数据没问题，容器都放得进槽位，把手和槽位都够得着（按宇树 G1），每个点位都站得下、走得到")
     if args.image:
         from . import sim
 
@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--sim", action="store_true", help="在 MuJoCo 物理仿真里执行（需要 pip install 'robohome[sim]'）")
     m.add_argument("--record", help="把每次执行录成 GIF，存到这个目录（会自动打开 --sim）")
 
-    c = sub.add_parser("sim-check", help="检查规范文件的三维数据：容器放得进槽位、把手和槽位手够得着")
+    c = sub.add_parser("sim-check", help="检查规范文件的三维数据：容器放得进槽位、把手和槽位手够得着、点位站得下走得到")
     c.add_argument("spec", nargs="?", default=str(DEFAULT_SPEC))
     c.add_argument("--image", help="顺便渲染一张厨房全景图（需要 MuJoCo）")
 

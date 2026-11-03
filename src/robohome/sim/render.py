@@ -118,7 +118,7 @@ class Recorder:
 
     def photo(self, body, name: str, look_at=None) -> str | None:
         """机器人头部相机拍一张（拍照技能和出问题时的现场照）。"""
-        head = np.array([body.base[0], body.base[1], 1.45]) + 0.1 * body._forward()
+        head = np.array([body.base[0], body.base[1], 1.2]) + 0.16 * body._forward()
         target = look_at if look_at is not None else head + body._forward() + np.array([0, 0, -0.6])
         vis = body.model.vis.global_
         overview_fovy, vis.fovy = vis.fovy, HEAD_FOVY

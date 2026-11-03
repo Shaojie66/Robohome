@@ -177,6 +177,53 @@ def hinge_side(area: Area) -> str:
     return "left" if to_local(area, f.handle_pose.position)[0] >= 0 else "right"
 
 
+@dataclass(frozen=True)
+class Decor:
+    """规范里没有、为了像个厨房补上的东西（柜子背后的墙、放小家电的台面）。x、y 是地上的范围，z 是顶面高度。"""
+
+    name: str
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+    top: float
+
+
+def decor(found: dict[str, Area]) -> list[Decor]:
+    """柜子背后补一面墙；底面离地 0.3 到 1.2 米、下面又没有别的柜子的（微波炉、空气炸锅），给它们垫一个台面。
+
+    只按柜子朝 -y 摆、靠着同一面墙的厨房来补。仿真画面和地面地图都用它。
+    """
+    boxes = []
+    for a in found.values():
+        if a.style == "surface":
+            continue
+        w, d, _ = a.geometry.size_m
+        corners = [to_world(a, (sx * (w / 2 + WALL), sy * (d / 2 + WALL), 0)) for sx in (-1, 1) for sy in (-1, 1)]
+        boxes.append((a, min(c[0] for c in corners), max(c[0] for c in corners), min(c[1] for c in corners), max(c[1] for c in corners)))
+    if not boxes:
+        return []
+    back = max(b[4] for b in boxes) + 0.03
+    out = [Decor("墙", min(b[1] for b in boxes) - 0.3, max(b[2] for b in boxes) + 0.3, back, back + 0.04, 2.3)]
+    supported = []
+    for a, ax0, ax1, ay0, ay1 in boxes:
+        bottom = a.geometry.position[2] - WALL
+        below = any(
+            o is not a and o.geometry.position[2] < bottom and ox0 < ax1 and ax0 < ox1 and oy0 < ay1 and ay0 < oy1
+            for o, ox0, ox1, oy0, oy1 in boxes
+        )
+        if 0.3 <= bottom <= 1.2 and not below:
+            supported.append((bottom, ax0, ax1, ay0, ay1))
+    if supported:
+        out.append(Decor(
+            "台面",
+            min(b[1] for b in supported) - 0.1, max(b[2] for b in supported) + 0.1,
+            min(b[3] for b in supported) - 0.05, back,
+            min(b[0] for b in supported),
+        ))
+    return out
+
+
 # ---------- 建家时的几何检查 ----------
 
 

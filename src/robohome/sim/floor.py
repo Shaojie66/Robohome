@@ -2,7 +2,8 @@
 
 只用规范数据和简单数学，不依赖 MuJoCo，建家时的几何检查也用它。仿真里再把激光看到的障碍加进来。
 
-- 障碍：每个写了三维尺寸的存放区和家电占的地面（含柜壁）、拉开着的抽屉、开着的门、禁区点位周围一圈
+- 障碍：每个写了三维尺寸的存放区和家电占的地面（含柜壁）、拉开着的抽屉、开着的门、禁区点位周围一圈，
+  还有柜子背后的墙和小家电下面的台面（见 layout.decor）
 - 走路：机器人按一个圆（Footprint.radius）在格子地图上找路，再把折线拉直
 - 站位：机器人在点位上干活时脚尖可以离家具更近（Footprint.front），所以点位本身可以在"走路的圆"碰到家具的地方；
   走进去和退出来都沿着点位的朝向直着走
@@ -15,11 +16,13 @@ import math
 from dataclasses import dataclass, field
 
 from ..spec.models import Home, Pose
-from .layout import DOOR_GAP, WALL, Area, areas, hinge_side
+from .layout import DOOR_GAP, WALL, Area, areas, decor, hinge_side
 
 RESOLUTION = 0.05  # 格子边长
 FORBIDDEN_RADIUS = 0.3  # 禁区点位周围多大一圈不能进（大约一个灶台宽）
 APPROACH_MAX = 0.6  # 从点位最多往后退这么远，找一个能转身的地方
+SEEN_POINT = 0.03  # 激光看到的一个点按这么大的一小块算（相邻两条激光在两米外差不多隔这么远）
+_BUCKET = 0.5
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,14 @@ class Footprint:
     front: float = 0.15  # 站定干活时，底盘中心到脚尖
     back: float = 0.12
     half_width: float = 0.23
+
+    def covers(self, pose: tuple[float, float, float], x: float, y: float, pad: float = 0.0) -> bool:
+        """站在 pose 时，地上的点 (x, y) 在不在身体占的长方形里。"""
+        px, py, yaw = pose
+        c, s = math.cos(yaw), math.sin(yaw)
+        dx, dy = x - px, y - py
+        f, side = c * dx + s * dy, -s * dx + c * dy
+        return -self.back - pad <= f <= self.front + pad and abs(side) <= self.half_width + pad
 
     def corners(self, pose: tuple[float, float, float]) -> list[tuple[float, float]]:
         """站定时占的长方形边上的一圈点（底盘中心 x、y，朝向弧度）。"""
@@ -124,20 +135,27 @@ class FloorMap:
     ny: int
     clearance: list[list[float]] = field(default_factory=list)
     seen: list[tuple[float, float]] = field(default_factory=list)  # 仿真里激光看到的点
+    _buckets: dict[tuple[int, int], list[tuple[float, float]]] = field(default_factory=dict)
 
     @classmethod
     def of(cls, home: Home, open_fixtures: set[str] | frozenset[str] = frozenset(), margin: float = 1.0) -> FloorMap:
         found = areas(home)
         boxes = [area_box(a) for a in found.values()]
         boxes += [b for a in found.values() if a.fixture is not None and a.fixture.id in open_fixtures if (b := open_box(a))]
+        for d in decor(found):
+            x0, x1, y0, y1 = d.x0, d.x1, d.y0, d.y1
+            if d.name == "墙":  # 墙后面走不过去：把墙往两头和后面延长到地图外
+                x0, x1, y1 = x0 - 2 * margin, x1 + 2 * margin, y1 + 2 * margin
+            boxes.append(Box2D((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, 0.0, d.name))
         zones = []
         for r in home.rooms.values():
             for wp in r.forbidden_waypoints:
                 if wp in r.waypoints:
                     p = r.waypoints[wp].position
                     zones.append((p[0], p[1], FORBIDDEN_RADIUS, f"禁区 {wp}"))
-        xs = [b.cx for b in boxes] + [p.position[0] for r in home.rooms.values() for p in r.waypoints.values()]
-        ys = [b.cy for b in boxes] + [p.position[1] for r in home.rooms.values() for p in r.waypoints.values()]
+        inside = [b for b in boxes if b.what != "墙"]
+        xs = [b.cx for b in inside] + [p.position[0] for r in home.rooms.values() for p in r.waypoints.values()]
+        ys = [b.cy for b in inside] + [p.position[1] for r in home.rooms.values() for p in r.waypoints.values()]
         x0, y0 = min(xs) - margin, min(ys) - margin
         nx = math.ceil((max(xs) + margin - x0) / RESOLUTION) + 1
         ny = math.ceil((max(ys) + margin - y0) / RESOLUTION) + 1
@@ -159,11 +177,19 @@ class FloorMap:
             d = min(d, max(0.0, math.hypot(x - zx, y - zy) - r))
         return d
 
+    def static_distance(self, x: float, y: float) -> float:
+        """点到规范里已知的障碍（家具、墙、禁区）的距离，不算激光看到的。"""
+        return self._static_clearance(x, y)
+
+    def _near_seen(self, x: float, y: float) -> list[tuple[float, float]]:
+        bx, by = math.floor(x / _BUCKET), math.floor(y / _BUCKET)
+        return [p for i in (-1, 0, 1) for j in (-1, 0, 1) for p in self._buckets.get((bx + i, by + j), ())]
+
     def distance(self, x: float, y: float) -> float:
-        """点到最近障碍（含激光看到的）的距离。"""
+        """点到最近障碍（含激光看到的）的距离。激光点只算半米以内的，再远的不影响走路和站位。"""
         d = self._static_clearance(x, y)
-        for px, py in self.seen:
-            d = min(d, math.hypot(x - px, y - py))
+        for px, py in self._near_seen(x, y):
+            d = min(d, max(0.0, math.hypot(x - px, y - py) - SEEN_POINT))
         return d
 
     def nearest(self, x: float, y: float) -> str:
@@ -175,23 +201,39 @@ class FloorMap:
         for zx, zy, r, name in self.zones:
             if (dd := max(0.0, math.hypot(x - zx, y - zy) - r)) < best:
                 best, what = dd, name
-        for px, py in self.seen:
-            if (dd := math.hypot(x - px, y - py)) < best:
+        for px, py in self._near_seen(x, y):
+            if (dd := max(0.0, math.hypot(x - px, y - py) - SEEN_POINT)) < best:
                 best, what = dd, "地上有东西"
         return what
 
-    def add_seen(self, points: list[tuple[float, float]], influence: float = 0.6) -> None:
-        """加进仿真里看到的障碍点，更新附近格子的距离。"""
+    def add_seen(self, points: list[tuple[float, float]], influence: float = _BUCKET) -> int:
+        """加进仿真里看到的障碍点（离已有的点不到 2 厘米的不重复加），更新附近格子的距离。返回新加了几个。"""
         k = math.ceil(influence / RESOLUTION)
+        added = 0
         for px, py in points:
+            if any(math.hypot(px - qx, py - qy) < 0.02 for qx, qy in self._near_seen(px, py)):
+                continue
+            added += 1
             self.seen.append((px, py))
+            self._buckets.setdefault((math.floor(px / _BUCKET), math.floor(py / _BUCKET)), []).append((px, py))
             ci, cj = self.cell(px, py)
             for i in range(max(0, ci - k), min(self.nx, ci + k + 1)):
                 for j in range(max(0, cj - k), min(self.ny, cj + k + 1)):
                     x, y = self.center(i, j)
-                    d = math.hypot(x - px, y - py)
+                    d = max(0.0, math.hypot(x - px, y - py) - SEEN_POINT)
                     if d < self.clearance[i][j]:
                         self.clearance[i][j] = d
+        return added
+
+    def seen_blocks(self, pts: list[tuple[float, float]], radius: float) -> bool:
+        """沿这条折线走，身体（半径 radius 的圆）会不会碰到激光看到的东西。"""
+        for a, b in zip(pts, pts[1:]):
+            n = max(1, math.ceil(math.hypot(b[0] - a[0], b[1] - a[1]) / RESOLUTION))
+            for k in range(n + 1):
+                x, y = a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n
+                if any(math.hypot(x - px, y - py) < radius + SEEN_POINT for px, py in self._near_seen(x, y)):
+                    return True
+        return False
 
     def _free(self, i: int, j: int, radius: float) -> bool:
         return 0 <= i < self.nx and 0 <= j < self.ny and self.clearance[i][j] > radius
@@ -205,18 +247,23 @@ class FloorMap:
     # ---------- 站位 ----------
 
     def stand_problem(self, pose: tuple[float, float, float], fp: Footprint = G1_FOOTPRINT) -> str | None:
-        """站在这里干活时身体会不会碰到障碍；碰到就返回碰到了什么。"""
+        """站在这里时身体会不会碰到障碍；碰到就返回碰到了什么。"""
         for x, y in fp.corners(pose):
-            if self.distance(x, y) < 1e-6:
+            if self._static_clearance(x, y) < 1e-6:
                 return self.nearest(x, y)
+        for x, y in self._near_seen(pose[0], pose[1]):
+            if fp.covers(pose, x, y, pad=SEEN_POINT):
+                return "地上有东西"
         return None
 
     def approach(self, pose: tuple[float, float, float], fp: Footprint = G1_FOOTPRINT) -> tuple[float, float] | None:
-        """从点位沿朝向往后退，找到第一个能转身的地方；退 APPROACH_MAX 米还不行就返回 None。"""
+        """从点位沿朝向往后退，找到第一个能转身的地方；退的路上身体碰到东西，或者退 APPROACH_MAX 米还不行，返回 None。"""
         x, y, yaw = pose
         for k in range(round(APPROACH_MAX / RESOLUTION) + 1):
             d = k * RESOLUTION
             p = (x - d * math.cos(yaw), y - d * math.sin(yaw))
+            if self.stand_problem((p[0], p[1], yaw), fp) is not None:
+                return None
             if self.distance(*p) > fp.radius:
                 return p
         return None
