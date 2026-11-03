@@ -1,7 +1,7 @@
 """网页和接口：手机用浏览器打开，下指令、看进度和回报、回答机器人的问题。
 
-只用 Python 标准库（http.server）。只接受家里局域网（以及本机）来的连接，外网地址一律拒绝；
-每个接口都要带配对码（启动时打印的地址里带着，手机打开一次就记住了）。
+只用 Python 标准库（http.server）。只接受和这台电脑在同一个网段的设备（连着同一个 Wi-Fi 的手机就是）
+和本机，别的地址一律拒绝；每个接口都要带配对码（启动时打印的地址里带着，手机打开一次就记住了）。
 
     GET  /                          手机网页
     GET  /api/state                 机器人状态、家里有什么、任务列表、等回答的问题
@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import socket
+import subprocess
 import threading
 import time
 from http import HTTPStatus
@@ -39,8 +40,65 @@ PHOTO_NAME = re.compile(r"^[\w.-]+\.(png|gif)$")
 TYPES = {"png": "image/png", "gif": "image/gif"}
 
 
-def on_home_network(address: str) -> bool:
-    """只认家里局域网和本机：192.168.x.x、10.x.x.x、172.16–31.x.x、本机、链路本地，以及 IPv6 的对应地址。"""
+# 读不到这台电脑的网卡时，退回去只认常见的家用局域网地址
+FALLBACK_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))
+_INET = re.compile(
+    r"inet6?\s+(?:addr:)?([0-9a-fA-F.:]+)(?:%\S+)?(?:/(\d+))?(?:\s+-->\s+\S+)?(?:\s+netmask\s+(\S+)|\s+prefixlen\s+(\d+))?"
+)
+
+
+def _prefix(netmask: str) -> int | None:
+    try:
+        if netmask.startswith("0x"):
+            return int(netmask, 16).bit_count()
+        return ipaddress.ip_network(f"0.0.0.0/{netmask}").prefixlen
+    except ValueError:
+        return None
+
+
+def parse_interfaces(text: str) -> list:
+    """从 ifconfig（macOS）或 ip -o addr（Linux）的输出里读出这台电脑的每个地址和它的网段。"""
+    out = []
+    for m in _INET.finditer(text):
+        addr, slash, netmask, prefixlen = m.groups()
+        prefix = int(slash) if slash else int(prefixlen) if prefixlen else _prefix(netmask) if netmask else None
+        if prefix is None:
+            continue
+        try:
+            out.append(ipaddress.ip_interface(f"{addr}/{prefix}"))
+        except ValueError:
+            continue
+    return out
+
+
+def local_interfaces() -> list | None:
+    """这台电脑的网卡地址；读不到（没有 ip 也没有 ifconfig）时返回 None。"""
+    for cmd in (["ip", "-o", "addr", "show"], ["ifconfig"], ["/sbin/ifconfig"]):
+        try:
+            text = subprocess.run(cmd, capture_output=True, text=True, timeout=3, check=False).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        found = parse_interfaces(text)
+        if found:
+            return found
+    return None
+
+
+def home_networks(interfaces: list | None) -> tuple:
+    """家里的网络 = 这台电脑网卡所在的网段（手机连同一个 Wi-Fi，就在同一个网段里）。
+
+    VPN 那种只有一个地址的点对点网卡（/32）不算：外网访问以后再议。
+    """
+    if interfaces is None:
+        return FALLBACK_NETWORKS
+    return tuple(dict.fromkeys(
+        i.network for i in interfaces
+        if not (i.ip.is_loopback or i.ip.is_link_local) and i.network.prefixlen < i.max_prefixlen
+    ))
+
+
+def on_home_network(address: str, networks=FALLBACK_NETWORKS) -> bool:
+    """只认本机、链路本地，以及和这台电脑在同一个网段的地址。"""
     try:
         ip = ipaddress.ip_address(address.split("%")[0])
     except ValueError:
@@ -49,24 +107,24 @@ def on_home_network(address: str) -> bool:
         ip = ip.ipv4_mapped
     if ip.is_loopback or ip.is_link_local:
         return True
-    if isinstance(ip, ipaddress.IPv4Address):
-        return any(ip in ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-    return ip in ipaddress.ip_network("fc00::/7")  # IPv6 的局域网地址
+    return any(ip.version == n.version and ip in n for n in networks)
 
 
-def lan_addresses() -> list[str]:
-    """这台电脑在家里局域网里的地址（手机要连的那个）。"""
-    found = []
-    for probe in ("192.168.0.1", "10.0.0.1", "172.16.0.1"):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect((probe, 9))  # UDP 的 connect 不发包，只是让系统选一个出口网卡
-                ip = s.getsockname()[0]
-        except OSError:
-            continue
-        if ip not in found and on_home_network(ip) and not ip.startswith("127."):
-            found.append(ip)
-    return found
+def lan_addresses(interfaces: list | None, networks: tuple) -> list[str]:
+    """手机要连的地址：这台电脑在家里网段里的 IPv4 地址，系统默认走的那个排前面。"""
+    found = [str(i.ip) for i in interfaces or [] if i.version == 4 and i.network in networks]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.168.0.1", 9))  # UDP 的 connect 不发包，只是让系统选一个出口网卡
+            default = s.getsockname()[0]
+        if default in found:
+            found.remove(default)
+            found.insert(0, default)
+        elif interfaces is None and on_home_network(default, networks) and not default.startswith("127."):
+            found.insert(0, default)
+    except OSError:
+        pass
+    return list(dict.fromkeys(found))
 
 
 def page() -> bytes:
@@ -76,6 +134,7 @@ def page() -> bytes:
 class Handler(BaseHTTPRequestHandler):
     server_version = "robohome"
     service: Service  # 由 make_server 设置
+    networks: tuple
     failures: dict[str, list[float]]
     failures_lock: threading.Lock
 
@@ -132,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- 检查 ----------
 
     def _from_home(self) -> bool:
-        if on_home_network(self.client_address[0]):
+        if on_home_network(self.client_address[0], self.networks):
             return True
         self._json(HTTPStatus.FORBIDDEN, {"error": "只在家里的网络里能用"})
         return False
@@ -199,29 +258,42 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.client_address[0], format % args)
 
 
-def make_server(service: Service, host: str = "0.0.0.0", port: int = 8765) -> ThreadingHTTPServer:
+def make_server(service: Service, host: str = "0.0.0.0", port: int = 8765, networks=None) -> ThreadingHTTPServer:
+    """networks 是放行的网段；不给就用这台电脑网卡所在的网段。"""
+    if networks is None:
+        networks = home_networks(local_interfaces())
     handler = type("BoundHandler", (Handler,), {
-        "service": service, "failures": {}, "failures_lock": threading.Lock(),
+        "service": service, "networks": tuple(networks), "failures": {}, "failures_lock": threading.Lock(),
     })
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server
 
 
-def serve(service: Service, host: str = "0.0.0.0", port: int = 8765, announce=print) -> None:
+def _say(text: str) -> None:
+    print(text, flush=True)  # 输出重定向到文件时也马上写出去
+
+
+def serve(service: Service, host: str = "0.0.0.0", port: int = 8765, announce=_say) -> None:
     """开网页服务（后台线程），机器人在主线程里一件件做事（仿真渲染在 Mac 上要在主线程）。Ctrl+C 停止。"""
-    server = make_server(service, host, port)
+    interfaces = local_interfaces()
+    networks = home_networks(interfaces)
+    server = make_server(service, host, port, networks)
     port = server.server_address[1]
     threading.Thread(target=server.serve_forever, name="http", daemon=True).start()
     key = service.key
     if host in ("127.0.0.1", "localhost", "::1"):
         urls = [f"http://localhost:{port}/?key={key}"]
     else:
-        urls = [f"http://{ip}:{port}/?key={key}" for ip in lan_addresses()] or [f"http://<这台电脑的局域网地址>:{port}/?key={key}"]
+        urls = [f"http://{ip}:{port}/?key={key}" for ip in lan_addresses(interfaces, networks)]
+        urls = urls or [f"http://<这台电脑的局域网地址>:{port}/?key={key}"]
         urls.append(f"http://localhost:{port}/?key={key}  （这台电脑自己的浏览器）")
+    v4 = [str(n) for n in networks if n.version == 4]
+    where = "、".join(v4) if interfaces is not None else "常见的家用局域网地址（读不到这台电脑的网卡）"
     announce(f"机器人管家已经开好（{service.world.home.name}，台账在 {service.store.root}）")
     announce("用连着同一个 Wi-Fi 的手机打开：\n  " + "\n  ".join(urls))
-    announce(f"配对码 {key}，只在家里的网络里能用。按 Ctrl+C 停止，台账和没做完的任务都会留着。")
+    announce(f"配对码 {key}。只接受和这台电脑在同一个网段的设备（{where or '无'}）和本机。")
+    announce("按 Ctrl+C 停止，台账和没做完的任务都会留着。")
     stop = threading.Event()
     try:
         service.run_forever(stop)

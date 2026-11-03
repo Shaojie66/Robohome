@@ -377,7 +377,44 @@ def test_service_ledger_matches_spec_format(tmp_path):
 # ---------- 网页和接口 ----------
 
 
-def test_home_network_only():
+MAC_IFCONFIG = """lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+\tinet 127.0.0.1 netmask 0xff000000
+\tinet6 ::1 prefixlen 128
+\tinet6 fe80::1%lo0 prefixlen 64 scopeid 0x1
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tinet6 fe80::1c2b:3a4d:5e6f:7081%en0 prefixlen 64 secured scopeid 0xb
+\tinet 100.66.10.20 netmask 0xfffffc00 broadcast 100.66.11.255
+bridge0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tinet 169.254.12.3 netmask 0xffff0000 broadcast 169.254.255.255
+utun10: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+\tinet 100.79.1.2 --> 100.79.1.2 netmask 0xffffffff
+"""
+
+LINUX_IP = """1: lo    inet 127.0.0.1/8 scope host lo       valid_lft forever preferred_lft forever
+2: wlan0    inet 192.168.31.20/24 brd 192.168.31.255 scope global dynamic wlan0
+2: wlan0    inet6 fd00:1:2:3::5/64 scope global dynamic
+2: wlan0    inet6 fe80::5/64 scope link
+"""
+
+
+def test_home_network_is_this_computers_subnet():
+    """家里的 Wi-Fi 不一定是 192.168.x.x，有的路由器分 100.64–127.x.x。按这台电脑网卡所在的网段算。"""
+    from robohome.server.http import home_networks, parse_interfaces
+
+    nets = home_networks(parse_interfaces(MAC_IFCONFIG))
+    assert [str(n) for n in nets] == ["100.66.8.0/22"]  # 本机、链路本地、VPN 的点对点地址不算网段
+    for ok in ("100.66.8.9", "100.66.11.254", "127.0.0.1", "::1", "fe80::1", "169.254.1.1", "::ffff:100.66.9.1"):
+        assert on_home_network(ok, nets), ok
+    for bad in ("100.66.12.1", "100.79.1.3", "192.168.1.23", "8.8.8.8", "not-an-ip"):
+        assert not on_home_network(bad, nets), bad
+
+    nets = home_networks(parse_interfaces(LINUX_IP))
+    assert [str(n) for n in nets] == ["192.168.31.0/24", "fd00:1:2:3::/64"]
+    assert on_home_network("192.168.31.77", nets) and on_home_network("fd00:1:2:3::9", nets)
+    assert not on_home_network("192.168.32.1", nets)
+
+
+def test_home_network_fallback_without_interface_list():
     for ok in ("192.168.1.23", "10.0.0.8", "172.20.1.2", "127.0.0.1", "::1", "fe80::1", "::ffff:192.168.1.5", "fd12::3"):
         assert on_home_network(ok), ok
     for bad in ("8.8.8.8", "100.64.1.1", "172.32.0.1", "2001:db8::1", "::ffff:1.2.3.4", "not-an-ip"):
@@ -387,7 +424,7 @@ def test_home_network_only():
 @pytest.fixture
 def server(tmp_path):
     s = make(tmp_path)
-    httpd = make_server(s, "127.0.0.1", 0)
+    httpd = make_server(s, "127.0.0.1", 0, networks=())
     stop = threading.Event()
     threads = [threading.Thread(target=httpd.serve_forever, daemon=True),
                threading.Thread(target=s.run_forever, args=(stop,), daemon=True)]
