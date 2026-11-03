@@ -399,6 +399,19 @@ def test_cli_run_in_simulation_with_fault(capsys):
     assert "拉不开" in out and "仿真" in out
 
 
+def test_recording_twice_in_one_process(tmp_path):
+    """mvp --record 一次跑好几个任务：后面录的画面要和第一次一样，不能上下颠倒。"""
+    images = []
+    for _ in range(2):
+        world = fresh_world(SPEC)
+        rec = Recorder(tmp_path, fps=4)
+        body = SimBody.attach(world, recorder=rec)
+        images.append(rec._render(body, rec.overview(body)))
+    if images[0] is None:
+        pytest.skip("这台机器上渲染不可用")
+    assert np.abs(images[0].astype(float) - images[1].astype(float)).mean() < 1.0
+
+
 def test_recording(tmp_path):
     world = fresh_world(SPEC)
     rec = Recorder(tmp_path, fps=4)
