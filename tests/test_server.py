@@ -388,12 +388,15 @@ bridge0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
 \tinet 169.254.12.3 netmask 0xffff0000 broadcast 169.254.255.255
 utun10: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
 \tinet 100.79.1.2 --> 100.79.1.2 netmask 0xffffffff
+\tinet6 fd7a:115c:a1e0::1234 prefixlen 48
 """
 
 LINUX_IP = """1: lo    inet 127.0.0.1/8 scope host lo       valid_lft forever preferred_lft forever
 2: wlan0    inet 192.168.31.20/24 brd 192.168.31.255 scope global dynamic wlan0
 2: wlan0    inet6 fd00:1:2:3::5/64 scope global dynamic
 2: wlan0    inet6 fe80::5/64 scope link
+5: tailscale0    inet 100.101.2.3/32 scope global tailscale0
+6: wg0    inet 10.8.0.2/24 scope global wg0
 """
 
 
@@ -402,16 +405,16 @@ def test_home_network_is_this_computers_subnet():
     from robohome.server.http import home_networks, parse_interfaces
 
     nets = home_networks(parse_interfaces(MAC_IFCONFIG))
-    assert [str(n) for n in nets] == ["100.66.8.0/22"]  # 本机、链路本地、VPN 的点对点地址不算网段
+    assert [str(n) for n in nets] == ["100.66.8.0/22"]  # 本机、链路本地、VPN 网卡（这里是 Tailscale）不算
     for ok in ("100.66.8.9", "100.66.11.254", "127.0.0.1", "::1", "fe80::1", "169.254.1.1", "::ffff:100.66.9.1"):
         assert on_home_network(ok, nets), ok
-    for bad in ("100.66.12.1", "100.79.1.3", "192.168.1.23", "8.8.8.8", "not-an-ip"):
+    for bad in ("100.66.12.1", "100.79.1.3", "fd7a:115c:a1e0::9", "192.168.1.23", "8.8.8.8", "not-an-ip"):
         assert not on_home_network(bad, nets), bad
 
     nets = home_networks(parse_interfaces(LINUX_IP))
     assert [str(n) for n in nets] == ["192.168.31.0/24", "fd00:1:2:3::/64"]
     assert on_home_network("192.168.31.77", nets) and on_home_network("fd00:1:2:3::9", nets)
-    assert not on_home_network("192.168.32.1", nets)
+    assert not on_home_network("192.168.32.1", nets) and not on_home_network("10.8.0.5", nets)
 
 
 def test_home_network_fallback_without_interface_list():

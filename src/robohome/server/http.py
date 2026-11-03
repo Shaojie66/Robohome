@@ -56,18 +56,28 @@ def _prefix(netmask: str) -> int | None:
         return None
 
 
+# VPN 的虚拟网卡（Tailscale、WireGuard 等）：从这些网卡进来的不是家里 Wi-Fi 上的设备，外网访问以后再议
+VPN_INTERFACES = re.compile(r"^(utun|tun|tap|wg|tailscale|zt|ppp|ipsec|gif|stf)", re.IGNORECASE)
+_IFACE = re.compile(r"^(?:\d+:\s+)?([^\s:]+):?\s")  # "en0: flags=…"（ifconfig）或 "2: wlan0    inet …"（ip -o）
+
+
 def parse_interfaces(text: str) -> list:
-    """从 ifconfig（macOS）或 ip -o addr（Linux）的输出里读出这台电脑的每个地址和它的网段。"""
-    out = []
-    for m in _INET.finditer(text):
-        addr, slash, netmask, prefixlen = m.groups()
-        prefix = int(slash) if slash else int(prefixlen) if prefixlen else _prefix(netmask) if netmask else None
-        if prefix is None:
+    """从 ifconfig（macOS）或 ip -o addr（Linux）的输出里读出这台电脑的每个地址和它的网段，VPN 网卡不算。"""
+    out, name = [], ""
+    for line in text.splitlines():
+        if line[:1] and not line[0].isspace() and (m := _IFACE.match(line)):
+            name = m.group(1)
+        if VPN_INTERFACES.match(name):
             continue
-        try:
-            out.append(ipaddress.ip_interface(f"{addr}/{prefix}"))
-        except ValueError:
-            continue
+        for m in _INET.finditer(line):
+            addr, slash, netmask, prefixlen = m.groups()
+            prefix = int(slash) if slash else int(prefixlen) if prefixlen else _prefix(netmask) if netmask else None
+            if prefix is None:
+                continue
+            try:
+                out.append(ipaddress.ip_interface(f"{addr}/{prefix}"))
+            except ValueError:
+                continue
     return out
 
 
