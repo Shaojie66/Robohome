@@ -6,12 +6,15 @@
       "name": "厨房",
       "waypoints": {
         "entrance": {"position": [0.0, 0.0, 0.0], "yaw_deg": 0},
-        "fridge_front": {"position": [1.3, 0.45, 0.0], "yaw_deg": 90},
-        "counter_front": {"position": [2.4, 0.5, 0.0], "yaw_deg": 90},
+        "pantry_front": {"position": [0.55, 0.8, 0.0], "yaw_deg": 90},
+        "freezer_front": {"position": [1.3, 0.48, 0.0], "yaw_deg": 90},
+        "fridge_front": {"position": [1.3, 0.82, 0.0], "yaw_deg": 90},
+        "counter_front": {"position": [2.4, 0.7, 0.0], "yaw_deg": 90},
         "stove_front": {"position": [3.4, 0.5, 0.0], "yaw_deg": 90},
-        "sink_front": {"position": [4.6, 0.35, 0.0], "yaw_deg": 90},
-        "table_front": {"position": [2.6, -0.45, 0.0], "yaw_deg": 270},
-        "intake_front": {"position": [0.6, -0.45, 0.0], "yaw_deg": 270}
+        "sink_front": {"position": [4.6, 0.55, 0.0], "yaw_deg": 90},
+        "dish_front": {"position": [5.3, 0.8, 0.0], "yaw_deg": 90},
+        "table_front": {"position": [2.6, -0.71, 0.0], "yaw_deg": 270},
+        "intake_front": {"position": [0.6, -0.66, 0.0], "yaw_deg": 270}
       },
       "forbidden_waypoints": ["stove_front"]
     }
@@ -19,8 +22,8 @@
   "storage": [
     {"id": "freezer", "name": "冷冻室", "room": "kitchen", "slots": 4, "temperature": "frozen", "geometry": {"position": [1.3, 1.35, 0.15], "size_m": [0.7, 0.5, 0.35], "layout": [2, 2, 1]}},
     {"id": "chiller", "name": "冷藏室", "room": "kitchen", "slots": 6, "temperature": "chilled", "geometry": {"position": [1.3, 1.35, 0.6], "size_m": [0.7, 0.5, 0.9], "layout": [2, 1, 3]}},
-    {"id": "upper_cabinet", "name": "吊柜", "room": "kitchen", "slots": 6, "temperature": "ambient", "geometry": {"position": [2.4, 1.35, 1.45], "size_m": [0.8, 0.35, 0.5], "layout": [3, 1, 2]}},
-    {"id": "dish_cabinet", "name": "碗柜", "room": "kitchen", "slots": 6, "temperature": "ambient", "geometry": {"position": [4.6, 1.35, 1.45], "size_m": [0.8, 0.35, 0.5], "layout": [3, 1, 2]}},
+    {"id": "pantry", "name": "橱柜", "room": "kitchen", "slots": 6, "temperature": "ambient", "geometry": {"position": [0.55, 1.3, 0.1], "size_m": [0.62, 0.4, 0.6], "layout": [3, 1, 2]}},
+    {"id": "dish_cabinet", "name": "碗柜", "room": "kitchen", "slots": 6, "temperature": "ambient", "geometry": {"position": [5.3, 1.3, 0.1], "size_m": [0.56, 0.4, 0.6], "layout": [3, 1, 2]}},
     {
       "id": "dining_table",
       "name": "餐桌",
@@ -29,7 +32,7 @@
       "temperature": "ambient",
       "kind": "surface",
       "waypoint": "table_front",
-      "geometry": {"position": [2.6, -1.2, 0.75], "size_m": [1.2, 0.8, 0.4], "yaw_deg": 180, "layout": [2, 2, 1]}
+      "geometry": {"position": [2.6, -1.2, 0.75], "size_m": [1.2, 0.6, 0.4], "yaw_deg": 180, "layout": [2, 2, 1]}
     },
     {
       "id": "intake_counter",
@@ -43,38 +46,29 @@
     }
   ],
   "fixtures": [
-    {"id": "freezer_door", "name": "冷冻室门", "kind": "drawer", "room": "kitchen", "waypoint": "fridge_front", "handle_pose": {"position": [1.3, 1.06, 0.42], "yaw_deg": 90}, "encloses": "freezer"},
+    {"id": "freezer_door", "name": "冷冻室门", "kind": "drawer", "room": "kitchen", "waypoint": "freezer_front", "handle_pose": {"position": [1.3, 1.06, 0.42], "yaw_deg": 90}, "encloses": "freezer"},
     {"id": "chiller_door", "name": "冷藏室门", "kind": "door", "room": "kitchen", "waypoint": "fridge_front", "handle_pose": {"position": [1.6, 1.06, 1.05], "yaw_deg": 90}, "encloses": "chiller"},
-    {"id": "cabinet_door", "name": "吊柜门", "kind": "door", "room": "kitchen", "waypoint": "counter_front", "handle_pose": {"position": [2.75, 1.13, 1.55], "yaw_deg": 90}, "encloses": "upper_cabinet"},
-    {"id": "microwave_door", "name": "微波炉门", "kind": "door", "room": "kitchen", "waypoint": "counter_front", "handle_pose": {"position": [2.97, 1.09, 1.07], "yaw_deg": 90}, "encloses": "microwave"},
+    {"id": "cabinet_door", "name": "橱柜门", "kind": "door", "room": "kitchen", "waypoint": "pantry_front", "handle_pose": {"position": [0.8, 1.06, 0.55], "yaw_deg": 90}, "encloses": "pantry"},
+    {"id": "microwave_door", "name": "微波炉门", "kind": "door", "room": "kitchen", "waypoint": "counter_front", "handle_pose": {"position": [2.53, 1.09, 1.07], "yaw_deg": 90}, "encloses": "microwave"},
     {"id": "air_fryer_basket", "name": "空气炸锅炸篮", "kind": "drawer", "room": "kitchen", "waypoint": "counter_front", "handle_pose": {"position": [2.05, 1.08, 1.0], "yaw_deg": 90}, "encloses": "air_fryer"},
-    {
-      "id": "dishwasher_door",
-      "name": "洗碗机门",
-      "kind": "door",
-      "room": "kitchen",
-      "waypoint": "sink_front",
-      "handle_pose": {"position": [4.6, 1.06, 0.72], "yaw_deg": 90},
-      "encloses": "dishwasher",
-      "hinge": "bottom"
-    },
-    {"id": "dish_cabinet_door", "name": "碗柜门", "kind": "door", "room": "kitchen", "waypoint": "sink_front", "handle_pose": {"position": [4.95, 1.13, 1.55], "yaw_deg": 90}, "encloses": "dish_cabinet"}
+    {"id": "dishwasher_drawer", "name": "洗碗机抽屉", "kind": "drawer", "room": "kitchen", "waypoint": "sink_front", "handle_pose": {"position": [4.6, 1.08, 0.5], "yaw_deg": 90}, "encloses": "dishwasher"},
+    {"id": "dish_cabinet_door", "name": "碗柜门", "kind": "door", "room": "kitchen", "waypoint": "dish_front", "handle_pose": {"position": [5.05, 1.06, 0.55], "yaw_deg": 90}, "encloses": "dish_cabinet"}
   ],
   "containers": [
     {"id": "box_f1", "name": "冷冻盒 1 号", "size_m": [0.25, 0.18, 0.1], "capacity_l": 4.5, "location": "freezer", "slot": 0, "safe_for": ["microwave"]},
     {"id": "box_f2", "name": "冷冻盒 2 号", "size_m": [0.25, 0.18, 0.1], "capacity_l": 4.5, "location": "freezer", "slot": 1},
     {"id": "box_c1", "name": "冷藏盒 1 号", "size_m": [0.3, 0.2, 0.12], "capacity_l": 7.2, "location": "chiller", "slot": 0, "safe_for": ["microwave"]},
     {"id": "box_c2", "name": "冷藏盒 2 号", "size_m": [0.3, 0.2, 0.12], "capacity_l": 7.2, "location": "chiller", "slot": 1},
-    {"id": "bin_a1", "name": "干货盒 1 号", "size_m": [0.2, 0.15, 0.15], "capacity_l": 4.5, "location": "upper_cabinet", "slot": 0},
+    {"id": "bin_a1", "name": "干货盒 1 号", "size_m": [0.2, 0.15, 0.15], "capacity_l": 4.5, "location": "pantry", "slot": 0},
     {"id": "box_f3", "name": "冷冻盒 3 号", "size_m": [0.25, 0.18, 0.1], "capacity_l": 4.5, "location": "freezer", "slot": 2, "safe_for": ["microwave"]},
     {"id": "box_c3", "name": "冷藏盒 3 号", "size_m": [0.3, 0.2, 0.12], "capacity_l": 7.2, "location": "chiller", "slot": 2, "safe_for": ["microwave"]},
-    {"id": "bin_a2", "name": "干货盒 2 号", "size_m": [0.2, 0.15, 0.15], "capacity_l": 4.5, "location": "upper_cabinet", "slot": 1},
+    {"id": "bin_a2", "name": "干货盒 2 号", "size_m": [0.2, 0.15, 0.15], "capacity_l": 4.5, "location": "pantry", "slot": 1},
     {"id": "jar_f1", "name": "密封罐 1 号", "kind": "jar", "size_m": [0.12, 0.12, 0.18], "capacity_l": 2.0, "location": "freezer", "slot": 3},
     {"id": "bowl_1", "name": "碗 1 号", "kind": "bowl", "size_m": [0.15, 0.15, 0.07], "capacity_l": 0.6, "location": "dishwasher", "slot": 0, "safe_for": ["microwave"], "home": "dish_cabinet", "home_slot": 0},
     {"id": "bowl_2", "name": "碗 2 号", "kind": "bowl", "size_m": [0.15, 0.15, 0.07], "capacity_l": 0.6, "location": "dishwasher", "slot": 1, "safe_for": ["microwave"], "home": "dish_cabinet", "home_slot": 1},
     {"id": "bowl_3", "name": "碗 3 号", "kind": "bowl", "size_m": [0.15, 0.15, 0.07], "capacity_l": 0.6, "location": "dishwasher", "slot": 2, "safe_for": ["microwave"], "home": "dish_cabinet", "home_slot": 2},
     {"id": "cup_1", "name": "水杯", "kind": "cup", "size_m": [0.08, 0.08, 0.1], "capacity_l": 0.35, "location": "dining_table", "slot": 0, "home": "dish_cabinet", "home_slot": 3},
-    {"id": "jar_salt", "name": "盐罐", "kind": "jar", "size_m": [0.08, 0.08, 0.1], "capacity_l": 0.5, "location": "dining_table", "slot": 1, "home": "upper_cabinet", "home_slot": 2}
+    {"id": "jar_salt", "name": "盐罐", "kind": "jar", "size_m": [0.08, 0.08, 0.1], "capacity_l": 0.5, "location": "dining_table", "slot": 1, "home": "pantry", "home_slot": 2}
   ],
   "items": [
     {"id": "beef", "name": "牛肉", "category": "肉类", "container": "box_f1", "aliases": ["牛排"], "volume_l": 1.0, "cook": {"defrost": {"minutes": 8}}},
@@ -95,7 +89,7 @@
       "door": "microwave_door",
       "capabilities": ["defrost", "heat", "stop"],
       "hazards": ["heat"],
-      "geometry": {"position": [2.8, 1.3, 0.95], "size_m": [0.4, 0.35, 0.25]}
+      "geometry": {"position": [2.7, 1.3, 0.95], "size_m": [0.4, 0.35, 0.25]}
     },
     {
       "id": "stove",
@@ -127,12 +121,12 @@
       "kind": "dishwasher",
       "room": "kitchen",
       "waypoint": "sink_front",
-      "door": "dishwasher_door",
+      "door": "dishwasher_drawer",
       "capabilities": ["wash", "stop"],
       "hazards": ["hot_water"],
       "max_minutes": 120,
       "slots": 6,
-      "geometry": {"position": [4.6, 1.35, 0.15], "size_m": [0.6, 0.5, 0.6], "layout": [3, 1, 2]}
+      "geometry": {"position": [4.6, 1.35, 0.15], "size_m": [0.6, 0.45, 0.4], "layout": [3, 2, 1]}
     }
   ]
 }

@@ -53,16 +53,16 @@ def test_container_too_big_for_its_slot(raw):
 
 
 def test_slot_out_of_reach(raw):
-    raw["rooms"][0]["waypoints"]["sink_front"]["position"] = [4.6, -1.5, 0.0]
+    raw["rooms"][0]["waypoints"]["dish_front"]["position"] = [5.3, -1.5, 0.0]
     problems = check_geometry(parse_home(raw))
     assert any("碗柜槽位" in p and "手够不着" in p for p in problems)
     assert any("碗柜门的把手" in p and "够不着" in p for p in problems)
 
 
 def test_reach_counts_the_hand_above_the_container(raw):
-    """槽位底面够得着还不够：取放时手在容器顶上。餐桌抬到 1.9 米，杯子顶上的手就超过 1.95 米了。"""
+    """槽位底面够得着还不够：取放时手在容器顶上。餐桌抬到 1.45 米还在 G1 的 1.55 米以内，杯子顶上的手就超了。"""
     pos = _area(raw, "dining_table")["geometry"]["position"]
-    pos[2] = 1.9
+    pos[2] = 1.45
     assert any("餐桌槽位" in p and "手够不着" in p for p in check_geometry(parse_home(raw)))
 
 
@@ -72,8 +72,8 @@ def test_handle_must_be_on_the_door(raw):
 
 
 def test_area_with_containers_needs_geometry(raw):
-    del _area(raw, "upper_cabinet")["geometry"]
-    assert any("吊柜" in p and "没有写三维尺寸" in p for p in check_geometry(parse_home(raw)))
+    del _area(raw, "pantry")["geometry"]
+    assert any("橱柜" in p and "没有写三维尺寸" in p for p in check_geometry(parse_home(raw)))
 
 
 def test_layout_must_hold_all_slots(raw):
@@ -84,15 +84,16 @@ def test_layout_must_hold_all_slots(raw):
 
 def test_reach_is_configurable():
     home = load_home(SPEC)
-    assert any("手够不着" in p for p in check_geometry(home, Reach(horizontal_m=0.5)))
+    assert any("手够不着" in p for p in check_geometry(home, Reach.box(0.5, 0.05, 1.95)))
 
 
-def test_geometry_survives_save_and_load(tmp_path):
-    home = load_home(SPEC)
+def test_geometry_survives_save_and_load(raw, tmp_path):
+    next(f for f in raw["fixtures"] if f["id"] == "microwave_door")["hinge"] = "bottom"
+    home = parse_home(raw)
     save_home(home, tmp_path / "home.json")
     again = load_home(tmp_path / "home.json")
     assert again.storage["chiller"].geometry == home.storage["chiller"].geometry
-    assert again.fixtures["dishwasher_door"].hinge == "bottom"
+    assert again.fixtures["microwave_door"].hinge == "bottom"
 
 
 def test_cli_sim_check(capsys):
@@ -156,7 +157,7 @@ def _do(world, steps):
 def test_drawer_carries_its_contents():
     world, body = sim_world()
     before = body._container_pos("box_f1")
-    _do(world, [{"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+    _do(world, [{"skill": "navigate", "args": {"waypoint": "freezer_front"}},
                 {"skill": "open", "args": {"fixture": "freezer_door"}}])
     moved = body._container_pos("box_f1") - before
     assert moved[1] == pytest.approx(-body.info.door_open["freezer_door"], abs=0.02)
@@ -171,7 +172,7 @@ def test_drawer_open_at_start_holds_its_contents(raw):
     world.robot.waypoint = "entrance"
     body = SimBody.attach(world)
     assert body.locate("box_f1") == ("freezer", 0)
-    report = _run(world, [{"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+    report = _run(world, [{"skill": "navigate", "args": {"waypoint": "freezer_front"}},
                           {"skill": "inspect", "args": {"location": "freezer"}},
                           {"skill": "pick", "args": {"container": "box_f1"}}])
     assert all(r.ok for r in report.results), report.render()
@@ -180,9 +181,9 @@ def test_drawer_open_at_start_holds_its_contents(raw):
 
 def test_door_really_swings_open():
     world, body = sim_world()
-    _do(world, [{"skill": "navigate", "args": {"waypoint": "sink_front"}},
-                {"skill": "open", "args": {"fixture": "dishwasher_door"}}])
-    assert body._joint_q("dishwasher_door") > 0.8 * body.info.door_open["dishwasher_door"]
+    _do(world, [{"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+                {"skill": "open", "args": {"fixture": "chiller_door"}}])
+    assert body._joint_q("chiller_door") > 0.8 * body.info.door_open["chiller_door"]
 
 
 def test_dropped_container_ends_on_the_floor():
@@ -214,7 +215,7 @@ def test_pick_finds_a_different_container():
     """槽位里放的是别的盒子：如实报告，不把错的东西拿走。"""
     world, _ = sim_world()
     world.home.containers["box_f1"].slot, world.home.containers["box_f2"].slot = 1, 0  # 台账写反了
-    report = _run(world, [{"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+    report = _run(world, [{"skill": "navigate", "args": {"waypoint": "freezer_front"}},
                           {"skill": "open", "args": {"fixture": "freezer_door"}},
                           {"skill": "pick", "args": {"container": "box_f1"}}])
     assert not report.ok and "里是冷冻盒 2 号，不是冷冻盒 1 号" in report.summary

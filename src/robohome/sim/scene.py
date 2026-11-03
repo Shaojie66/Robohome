@@ -16,9 +16,7 @@ from dataclasses import dataclass, field
 from xml.sax.saxutils import quoteattr
 
 from ..spec.models import Container, Home
-from .layout import DOOR_GAP, WALL, Area, areas, hinge_side, to_local, to_world
-
-DOOR_OPEN_RAD = {"left": 1.75, "right": 1.75, "bottom": 1.5}  # 侧开门开 100 度，下翻门放平
+from .layout import DOOR_GAP, DOOR_OPEN_RAD, WALL, Area, areas, hinge_side, to_local, to_world
 DOOR_FORCE = 25.0  # 拉门的最大力矩（N·m）
 DRAWER_FORCE = 90.0  # 拉抽屉的最大力（N）
 STUCK_FRICTION = 5000.0  # 卡住的门轴摩擦，远大于手的力气

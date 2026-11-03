@@ -306,7 +306,7 @@ def hold_parcel_at_fridge(world, door="freezer_door"):
     steps = [
         {"skill": "navigate", "args": {"waypoint": "intake_front"}},
         {"skill": "pick", "args": {"container": "parcel_1"}},
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "fridge_front" if door == "chiller_door" else "freezer_front"}},
     ]
     if door:
         steps.append({"skill": "open", "args": {"fixture": door}})

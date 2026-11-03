@@ -160,7 +160,7 @@ def test_bad_fault_specs(world, fault, match):
 
 def test_inspect_needs_open_door(world):
     report = execute(world, [
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
         {"skill": "inspect", "args": {"location": "freezer"}},
     ])
     assert report.results[-1].stage == "precondition" and "冷冻室门没开" in report.summary
@@ -174,7 +174,7 @@ def test_inspect_table_needs_its_waypoint(world):
 def test_inspect_flags_ledger_mismatch(world):
     apply_fault(world, "missing:box_f1")
     report = execute(world, [
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
         {"skill": "open", "args": {"fixture": "freezer_door"}},
         {"skill": "inspect", "args": {"location": "freezer"}},
         {"skill": "close", "args": {"fixture": "freezer_door"}},
@@ -196,7 +196,7 @@ def test_surface_flags_object_without_home(world):
 
 def _holding_jar_at_fryer():
     return [
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
         {"skill": "open", "args": {"fixture": "freezer_door"}},
         {"skill": "pick", "args": {"container": "jar_f1"}},
         {"skill": "close", "args": {"fixture": "freezer_door"}},
@@ -249,14 +249,14 @@ def test_temperature_only_for_appliances_that_have_it(world):
 def test_appliance_slots_are_checked(world):
     report = execute(world, [
         {"skill": "navigate", "args": {"waypoint": "sink_front"}},
-        {"skill": "open", "args": {"fixture": "dishwasher_door"}},
+        {"skill": "open", "args": {"fixture": "dishwasher_drawer"}},
         {"skill": "pick", "args": {"container": "bowl_1"}},
         {"skill": "place", "args": {"container": "bowl_1", "location": "dishwasher", "slot": 6}},
     ])
     assert "没有槽位 6" in report.summary
-    # 第一次失败后收尾把洗碗机门关上了，重新打开再试
+    # 第一次失败后收尾把洗碗机抽屉关上了，重新打开再试
     report = execute(world, [
-        {"skill": "open", "args": {"fixture": "dishwasher_door"}},
+        {"skill": "open", "args": {"fixture": "dishwasher_drawer"}},
         {"skill": "place", "args": {"container": "bowl_1", "location": "dishwasher", "slot": 1}},
     ])
     assert "已被 bowl_2 占用" in report.summary
@@ -267,7 +267,7 @@ def test_cleanup_does_not_walk_while_holding(world):
     apply_fault(world, "stuck:microwave_door")
     s = Scheduler(world, RulePlanner(), rules=rules)
     report = s.execute("故意不关门就走", [Step(**x) for x in [
-        {"skill": "navigate", "args": {"waypoint": "fridge_front"}},
+        {"skill": "navigate", "args": {"waypoint": "freezer_front"}},
         {"skill": "open", "args": {"fixture": "freezer_door"}},
         {"skill": "pick", "args": {"container": "box_f1"}},
         {"skill": "navigate", "args": {"waypoint": "counter_front"}},
@@ -379,14 +379,14 @@ def test_model_plan_with_only_essential_steps(world):
         {"skill": "pick", "args": {"container": "cup_1"}},
         {"skill": "place", "args": {"container": "cup_1", "location": "dish_cabinet", "slot": 3}},
         {"skill": "pick", "args": {"container": "jar_salt"}},
-        {"skill": "place", "args": {"container": "jar_salt", "location": "upper_cabinet", "slot": 0}},  # 槽位被占
+        {"skill": "place", "args": {"container": "jar_salt", "location": "pantry", "slot": 0}},  # 槽位被占
     ]
     steps = LLMPlanner(client=FakeClient(plan(model_steps))).plan("把桌上散落的常用物品收回原位", world)
     s = Scheduler(world, FixedPlan(steps))
     s.submit("把桌上散落的常用物品收回原位")
     [report] = s.run_pending()
     assert report.ok, report.render()
-    assert world.home.containers["jar_salt"].location == "upper_cabinet"
+    assert world.home.containers["jar_salt"].location == "pantry"
     assert world.home.containers["jar_salt"].slot != 0
 
 
@@ -518,13 +518,14 @@ def test_fridge_doors_are_not_open_together(world):
 
 
 def test_door_stays_open_while_still_needed(world):
-    """洗碗机里还有碗要拿就先别关，拿完最后一个再关。"""
+    """洗碗机里还有碗要拿就先别关，拿完最后一个再关。碗柜和洗碗机要在同一个点位，不然走开前本来就得关。"""
+    world.home.fixtures["dish_cabinet_door"].waypoint = "sink_front"
     model = []
     for bowl, slot in (("bowl_1", 0), ("bowl_2", 1)):
         model += [{"skill": "pick", "args": {"container": bowl}},
                   {"skill": "place", "args": {"container": bowl, "location": "dish_cabinet", "slot": slot}}]
     steps = normalize([Step(**x) for x in model], world)
-    assert [s.args["fixture"] for s in steps if s.skill == "open"].count("dishwasher_door") == 1
+    assert [s.args["fixture"] for s in steps if s.skill == "open"].count("dishwasher_drawer") == 1
     assert simulate(world, steps).ok
 
 
@@ -610,7 +611,7 @@ def test_model_open_and_navigate_are_done_when_needed(world):
     steps = normalize([Step(**x) for x in model], world)
     opens = [s.args["fixture"] for s in steps if s.skill == "open"]
     assert opens.count("air_fryer_basket") == 1
-    assert steps[0] == Step("navigate", {"waypoint": "fridge_front"})
+    assert steps[0] == Step("navigate", {"waypoint": "freezer_front"})
     s = Scheduler(world, FixedPlan(steps))
     s.submit(TASKS[2].instruction)
     [report] = s.run_pending()

@@ -201,8 +201,8 @@ class SimBody:
 
     def _check_reach(self, target, what: str) -> None:
         dist = math.hypot(target[0] - self.base[0], target[1] - self.base[1])
-        if dist > self.reach.horizontal_m + 1e-6 or not self.reach.min_z <= target[2] <= self.reach.max_z:
-            raise SkillFailed(f"手够不着{what}：水平 {dist:.2f} 米、高 {target[2]:.2f} 米（仿真）")
+        if not self.reach.reaches(dist, target[2]):
+            raise SkillFailed(f"手够不着{what}：水平 {dist:.2f} 米、高 {target[2]:.2f} 米（仿真：{self.reach.limit_text(target[2])}）")
 
     def _approach_points(self, area: Area, slot_local, top_z: float) -> tuple[np.ndarray, np.ndarray]:
         """手伸进去之前停的点，和最终取放的点（都是手的位置）。top_z 是手要贴的高度（局部坐标）。"""
