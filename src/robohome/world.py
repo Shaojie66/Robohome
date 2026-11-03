@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .appliances.base import ApplianceAdapter, MockAppliance
-from .spec.models import Home
+from .spec.models import FLOOR, Home
 
 log = logging.getLogger(__name__)
 
@@ -21,9 +21,6 @@ class RobotState:
     room: str
     waypoint: str
     holding: str | None = None  # 手里拿着的容器 id
-
-
-FLOOR = "floor"  # 搬运途中掉下去的容器的位置
 
 
 @dataclass

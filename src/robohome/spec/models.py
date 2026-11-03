@@ -66,6 +66,8 @@ class Fixture:
 
 FOOD_KINDS = ("box", "jar")  # 能装食物、入库时可以分配的容器种类
 PARCEL = "parcel"  # 刚买回来、还没装盒的包装
+HELD, FLOOR = "robot", "floor"  # 容器拿在机器人手里、掉在地上时的位置：只在运行时出现，规范文件里不该有
+RUNTIME_LOCATIONS = (HELD, FLOOR)
 
 
 @dataclass

@@ -54,6 +54,7 @@ Everything below is reproducible from this repo:
 - **31 fault cases all stop safely**: appliance offline, stuck door, dropped item, inventory out of sync with reality, a blocked path, a covered container tag, and more. They pass with both the mock backend and the MuJoCo simulation.
 - **Local LLM first**: Ollama + `qwen3:8b` by default, no API key needed. On the author's Mac, each of the five household tasks and three grocery sentences passed 20 runs in a row, with the slowest single run around 2 minutes. Claude is supported as an alternative.
 - **Intake preview**: without letting the robot move, you can just see what it recognized and which containers it would use; the inventory changes only after you confirm.
+- **Phone entry point**: `robohome serve` runs a service on a computer at home. Open it in a phone browser to give instructions, watch each step, and get reports with photos. Things the owner has to decide (an item it can't recognize, an instruction it can't follow, an owner-started appliance that would need stopping) are pushed to the phone and wait for an answer; before stowing groceries it shows where each item would go and waits for "开始装" (start). It only works on the home Wi-Fi, and the inventory and unfinished tasks survive a restart.
 - **Simulation generated from the spec**: give storage areas and appliances their dimensions and you get cabinets, drawers and hinged doors. Doors have to be pulled open, and things can actually fall.
 - **Simulation sized to the Unitree G1**: hand reach is computed from Unitree's published G1 model (about 0.7 m horizontally at waist height, 1.55 m at most) and checked when the home is set up. The robot plans its walk around furniture for its body size, detours around anything new its lidar sees on the floor, and stops if there's no way through. Containers sit a few centimeters off; the robot finds them by reading the tag on each container with a hand camera.
 
@@ -109,6 +110,15 @@ robohome mvp --sim --record out/        # record every run as a GIF
 
 Headless Linux needs OSMesa for rendering (`apt install libosmesa6`); without rendering it still runs the physics, just without images.
 
+### From your phone
+
+```bash
+robohome serve                          # run the home service (standard library only)
+robohome serve --sim --planner local    # act in simulation so reports carry photos; local model plans and reads labels
+```
+
+It prints an address such as `http://192.168.1.8:8765/?key=…`. Open it on a phone connected to the same Wi-Fi and the pairing code is remembered. Inventory, tasks and photos live in `~/.robohome` (change with `--data-dir`), so stopping and starting again picks up where it left off. The page is in Chinese for now.
+
 More commands, the full fault list and simulation details are in [docs/how-it-works.md](./docs/how-it-works.md) (Chinese).
 
 ## How it works
@@ -145,13 +155,14 @@ The LLM only thinks; it never acts directly. After a stop, the robot photographs
 | `intake/` | Recognize new items → assign containers → update inventory | Keyword recognizer (offline) + LLM recognizer (text, photo, or labels on the intake counter) |
 | `llm/` | Local models (Ollama etc.) or Claude behind the same interface | Working |
 | `sim/` | Generate the MuJoCo scene from the spec; floor routing, lidar, tag reading; record video and photos | With containers placed slightly off, all eight tasks and 31 faults pass in simulation |
+| `server/` | Home server and phone page: queue, progress, reports, questions for the owner, persistence | Standard library only; LAN only, pairing code required |
 
 ## Safety boundaries
 
 - The robot never touches heat sources or blades directly. It only opens and carries: it won't open a running appliance or put things in or take them out.
 - It stays out of no-go zones (such as in front of the stove) and closes the doors it opened before leaving a waypoint.
 - It won't start a hazardous appliance while holding something; starting one requires a run time no longer than the appliance's `max_minutes` in the spec (default 30).
-- If an appliance's state can't be read, it is treated as possibly running. The robot won't interrupt an appliance it didn't start.
+- If an appliance's state can't be read, it is treated as possibly running. The robot won't interrupt an appliance it didn't start; if it would have to, it asks the owner on the phone first.
 - During intake, food only goes into the right temperature zone and each container holds one kind of thing. The robot never opens packaging; if one item doesn't fit a container, the owner is asked to split it.
 
 Full rules: [safety principles](./docs/how-it-works.md#安全原则) (Chinese).
@@ -165,6 +176,7 @@ These need replacing or validating before moving to a real robot:
 - Appliance internals (heating, timers) are simulated, not yet connected to Home Assistant or Mi Home.
 - The rule-based planner only knows fixed phrasings of the five tasks plus intake; free-form instructions need an LLM.
 - There is one sample kitchen so far; no real home has been packaged yet.
+- The phone page uses plain HTTP on the home network with a pairing code; there are no accounts or encryption yet, and no access from outside the home.
 
 ## Roadmap
 
@@ -177,7 +189,7 @@ Phase 2:
 
 1. Grocery intake loop: the robot stows new items into the right zone itself and records where they went ✓
 2. More realistic simulation: walk around furniture, find containers by their tags when they're slightly off, check reach against Unitree G1's published model ✓
-3. Phone entry point + home server: run the service on a computer at home, send instructions and get reports from a phone browser, LAN only
+3. Phone entry point + home server: run the service on a computer at home, send instructions, get reports and answer the robot's questions from a phone browser, LAN only ✓
 4. Open-source release
 
 ## Get involved

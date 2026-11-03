@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .models import (
     PARCEL,
+    RUNTIME_LOCATIONS,
     Appliance,
     Container,
     Fixture,
@@ -58,7 +59,8 @@ def _by_id(objs: list) -> dict:
     return out
 
 
-def parse_home(data: dict) -> Home:
+def parse_home(data: dict, runtime: bool = False) -> Home:
+    """runtime=True 时允许容器在机器人手里或掉在地上（服务保存的运行状态里会有），规范文件里不允许。"""
     rooms = _by_id(
         [
             Room(
@@ -124,7 +126,7 @@ def parse_home(data: dict) -> Home:
         items=items,
         appliances=appliances,
     )
-    validate(home)
+    validate(home, runtime)
     return home
 
 
@@ -133,7 +135,7 @@ def load_home(path: str | Path) -> Home:
         return parse_home(json.load(fh))
 
 
-def validate(home: Home) -> None:
+def validate(home: Home, runtime: bool = False) -> None:
     """检查所有引用都能对上，保证机器人拿到的是一份自洽的家。"""
     errors: list[str] = []
 
@@ -167,6 +169,8 @@ def validate(home: Home) -> None:
 
     used: dict[tuple[str, int], str] = {}
     for c in home.containers.values():
+        if runtime and c.location in RUNTIME_LOCATIONS:
+            continue
         n = slots_of(c.location)
         if n is None:
             errors.append(f"容器 {c.id}: 位置 {c.location} 不存在")

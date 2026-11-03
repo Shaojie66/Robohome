@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..planner.base import Planner, Step
@@ -59,6 +60,27 @@ class Report:
             lines.append(f"⚠ 需要人处理：{'；'.join(self.needs_attention)}")
         return "\n".join(lines)
 
+    def to_dict(self) -> dict:
+        """给 JSON 输出和手机网页用。"""
+
+        def step(r: StepResult) -> dict:
+            return {"step": r.step.describe(), "ok": r.ok, "stage": r.stage, "message": r.message}
+
+        def photo(p: Photo) -> dict:
+            return {"location": p.location, "title": p.title, "seen": p.seen, "notes": p.notes, "image": p.image,
+                    "text": p.describe()}
+
+        return {
+            "instruction": self.instruction, "ok": self.ok, "summary": self.summary,
+            "steps": [step(r) for r in self.results],
+            "photos": [photo(p) for p in self.photos],
+            "scene": photo(self.scene) if self.scene else None,
+            "notices": self.notices,
+            "cleanup": [step(r) for r in self.cleanup],
+            "needs_attention": self.needs_attention,
+            "final_state": self.final_state,
+        }
+
 
 def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None, instruction: str = "") -> Report:
     """在世界的副本上预演计划，不改动真实世界。规划层用它在执行前发现问题。"""
@@ -66,12 +88,24 @@ def simulate(world: World, plan: list[Step], rules: list[Rule] | None = None, in
     return sandbox.execute(instruction or "预演", plan)
 
 
+# 每一步开始前（结果为 None）和做完后各通知一次：第几步、哪一步、结果。手机网页用它显示进度
+Progress = Callable[[int, Step, "StepResult | None"], None]
+
+
 class Scheduler:
-    def __init__(self, world: World, planner: Planner, rules: list[Rule] | None = None, cleanup: bool = True):
+    def __init__(
+        self,
+        world: World,
+        planner: Planner,
+        rules: list[Rule] | None = None,
+        cleanup: bool = True,
+        on_progress: Progress | None = None,
+    ):
         self.world = world
         self.planner = planner
         self.rules = rules if rules is not None else list(DEFAULT_RULES)
         self.cleanup = cleanup  # 预演时关掉，真实执行时打开
+        self.on_progress = on_progress
         self.queue: deque[str] = deque()
 
     def submit(self, instruction: str) -> None:
@@ -99,8 +133,12 @@ class Scheduler:
         self.world.instruction = instruction
         photos_before, notices_before = len(self.world.photos), len(self.world.notices)
         for i, step in enumerate(plan):
+            if self.on_progress:
+                self.on_progress(i, step, None)
             result = self._run_step(i, step)
             report.results.append(result)
+            if self.on_progress:
+                self.on_progress(i, step, result)
             if not result.ok:
                 report.ok = False
                 report.summary = f"第 {i + 1} 步（{step.describe()}）{result.message}"
@@ -116,14 +154,24 @@ class Scheduler:
             else:
                 report.summary = f"共 {len(plan)} 步"
         if not report.ok and self.cleanup:
-            report.scene = self.world.scene_photo()
-            if self.world.opened_by_robot:
-                report.cleanup = self._close_opened_doors()
-            report.needs_attention = self._needs_attention()
+            self._wrap_up(report)
         report.photos = self.world.photos[photos_before:]
         report.notices = self.world.notices[notices_before:]
         report.final_state = self.world.snapshot()
         return report
+
+    def abort(self, instruction: str, summary: str) -> Report:
+        """任务被打断（比如服务重启时正做到一半）：和失败一样拍现场照、关上自己开的门、列出要人处理的事。"""
+        report = Report(instruction, ok=False, summary=summary)
+        self._wrap_up(report)
+        report.final_state = self.world.snapshot()
+        return report
+
+    def _wrap_up(self, report: Report) -> None:
+        report.scene = self.world.scene_photo()
+        if self.world.opened_by_robot:
+            report.cleanup = self._close_opened_doors()
+        report.needs_attention = self._needs_attention()
 
     def _needs_attention(self) -> list[str]:
         home = self.world.home
